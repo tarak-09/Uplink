@@ -25,6 +25,7 @@ class Settings:
     # The network being watched
     feed_url: str = "https://map.ffmuc.net/data/meshviewer.json"
     network_name: str = "Freifunk München"
+    time_zone_label: str = "Munich time"  # follows every clock time in messages: "23:44 Munich time"
     poll_interval: int = 60
     stale_after: int = 180
     language: str = "english"
@@ -249,6 +250,7 @@ def _chat_id(raw: str) -> str:
 _VARIABLES: dict[str, tuple[str, Callable[[str], Any]]] = {
     "FEED_URL": ("feed_url", _url),
     "NETWORK_NAME": ("network_name", str),
+    "TIME_ZONE_LABEL": ("time_zone_label", str),
     "POLL_INTERVAL_SECONDS": ("poll_interval", _integer),
     "STALE_AFTER_SECONDS": ("stale_after", _integer),
     "LANGUAGE": ("language", _language),

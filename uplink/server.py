@@ -135,7 +135,7 @@ class WebhookApp:
         self.store.write_json("inbox.json", {"last_inbound_at": self._clock().isoformat(timespec="seconds")})
         self.store.log("message_in", kind=message.kind, chars=len(message.text))
         if message.kind == "text":
-            draft = self.assistant.reply(message.text)
+            draft = self.assistant.reply(message.text, chat=message.sender)
         elif message.kind == "audio":
             draft = self._answer_voice(message)
         else:
@@ -165,7 +165,7 @@ class WebhookApp:
         heard = templates.text(
             templates.detect_language(transcript.text) or language, "heard", transcript=transcript.text[:300]
         )
-        answer = self.assistant.reply(transcript.text)
+        answer = self.assistant.reply(transcript.text, chat=message.sender)
         return Draft(f"{heard}\n\n{answer.text}", answer.source, answer.note)
 
     def _work(self) -> None:

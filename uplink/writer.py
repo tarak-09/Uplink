@@ -26,6 +26,7 @@ STYLE_RULES = """\
 Rules:
 - Use only the facts given. Never add names, numbers, times, places or causes that are not in them.
 - Copy node names exactly as written, in Latin letters, even when writing {language}.
+- Write clock times as the facts do, with the time zone that follows them.
 - Plain WhatsApp text: *bold* is fine; no headings, tables, links or hashtags; at most one emoji.
 - Stay under {max_chars} characters."""
 
@@ -52,10 +53,15 @@ firmware update.
     + STYLE_RULES,
     "answer": """\
 You are Uplink, a WhatsApp helper for the volunteers who run {network}, a free community Wi-Fi mesh. \
-The next message is the network's current state as JSON; then comes the volunteer's question.
+The next message is the network's current state as JSON. Then comes the volunteer's question, sometimes \
+after your last exchange with them from the past few minutes.
 
-Answer from the JSON only. If the answer is not in it, say you don't know and suggest sending "status". \
-Reply in the language of the question (English, Telugu or Hindi); if unsure, use {language}. Be brief and concrete.
+Answer from the JSON only. When asked, you may repeat, shorten or translate your last answer (for example \
+"say that in Telugu"), keeping its facts and numbers. Questions that are not about {network} are not yours \
+to answer, even after an exchange: say you only answer questions about {network} and suggest sending \
+"status". If the answer is not in the JSON, say you don't know and suggest sending "status". Reply in the \
+language the volunteer asks for, otherwise in the language of the question (English, Telugu or Hindi); \
+if unsure, use {language}. Be brief and concrete.
 
 """
     + STYLE_RULES,
@@ -94,16 +100,31 @@ class Writer:
         ]
         return self._ask(messages, facts, fallback)
 
-    def answer(self, question: str, state: Mapping[str, Any], fallback: str, language: str | None = None) -> Draft:
-        """Answer a volunteer's question from the network state; `fallback` covers failures."""
+    def answer(
+        self,
+        question: str,
+        state: Mapping[str, Any],
+        fallback: str,
+        language: str | None = None,
+        earlier: tuple[str, str] | None = None,
+    ) -> Draft:
+        """Answer a volunteer's question from the network state; `fallback` covers failures.
+
+        `earlier` is the chat's last question and answer, for follow-ups such as "say that in Telugu".
+        The draft may repeat their numbers.
+        """
         if self.model is None:
             return Draft(fallback, "template", "no model configured")
         messages = [
             {"role": "developer", "content": self._format(PROMPTS["answer"], language or self.language)},
             {"role": "developer", "content": "Network state:\n" + json.dumps(state, ensure_ascii=False, indent=1)},
-            {"role": "user", "content": question},
         ]
-        return self._ask(messages, {"state": state, "question": question}, fallback)
+        known: dict[str, Any] = {"state": state, "question": question}
+        if earlier:
+            messages += [{"role": "user", "content": earlier[0]}, {"role": "assistant", "content": earlier[1]}]
+            known["earlier"] = {"question": earlier[0], "answer": earlier[1]}
+        messages.append({"role": "user", "content": question})
+        return self._ask(messages, known, fallback)
 
     def _ask(self, messages: list[dict[str, str]], facts: Mapping[str, Any], fallback: str) -> Draft:
         assert self.model is not None

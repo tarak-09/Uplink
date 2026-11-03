@@ -95,7 +95,7 @@ class StoryTest(MonitorTestCase):
         self.assertEqual(self.poll().sent, 0, "confirmed one poll later")
         alert = self.poll()
         self.assertEqual((alert.status, alert.sent, alert.open_incidents), ("ok", 1, 1))
-        self.assertEqual(self.graph.texts(), ["*a.home is down*\n3 nodes offline since 12:01."])
+        self.assertEqual(self.graph.texts(), ["*a.home is down*\n3 nodes offline since 12:01 Munich time."])
         self.mesh.restore("a", "b", "c")
         recovery = self.poll()
         self.assertEqual((recovery.sent, recovery.open_incidents), (1, 0))
@@ -178,7 +178,8 @@ class TemplateModeTest(MonitorTestCase):
         template = self.graph.sent()[0]["template"]
         self.assertEqual(template["name"], "uplink_alert")
         self.assertEqual(
-            template["components"][0]["parameters"][0]["text"], "*a.home is down* · 2 nodes offline since 12:00."
+            template["components"][0]["parameters"][0]["text"],
+            "*a.home is down* · 2 nodes offline since 12:00 Munich time.",
         )
 
 
@@ -199,7 +200,7 @@ class TwilioModeTest(MonitorTestCase):
         self.assertEqual(self.poll().sent, 1)
         self.assertEqual(
             self.twilio.bodies(),
-            ["*a.home is down*\n2 nodes offline since 12:00.", "*Back online: a.home*\nIt lasted 3 min."],
+            ["*a.home is down*\n2 nodes offline since 12:00 Munich time.", "*Back online: a.home*\nIt lasted 3 min."],
         )
         self.assertEqual({m["To"] for m in self.twilio.sent()}, {"whatsapp:+4915112345678"})
         self.assertEqual(self.graph.sent(), [])
@@ -223,7 +224,10 @@ class TelegramModeTest(MonitorTestCase):
         self.assertEqual(self.poll().sent, 1)
         self.assertEqual(
             self.telegram.texts(),
-            ["<b>a.home is down</b>\n2 nodes offline since 12:00.", "<b>Back online: a.home</b>\nIt lasted 3 min."],
+            [
+                "<b>a.home is down</b>\n2 nodes offline since 12:00 Munich time.",
+                "<b>Back online: a.home</b>\nIt lasted 3 min.",
+            ],
         )
         self.assertEqual({m["chat_id"] for m in self.telegram.sent()}, {FakeTelegram.chat_id})
         self.assertEqual([e["ref"] for e in self.events("alert_sent")], ["1", "2"])
@@ -250,6 +254,7 @@ class FeedHealthTest(MonitorTestCase):
         self.poll()
         self.assertEqual(len(self.graph.texts()), 1)
         self.assertIn("Uplink can't see the network", self.graph.texts()[0])
+        self.assertRegex(self.graph.texts()[0], r"has not updated since \d\d:\d\d Munich time\.")
         self.feed.fail_with = None
         self.assertEqual(self.poll().status, "ok")
         self.assertEqual(len(self.events("feed_recovered")), 1)
@@ -279,6 +284,7 @@ class GlitchTest(MonitorTestCase):
         self.assertEqual(statuses, ["glitch", "glitch", "glitch"])
         self.assertEqual(len(self.graph.texts()), 1)
         self.assertIn("60 nodes went offline at once", self.graph.texts()[0])
+        self.assertRegex(self.graph.texts()[0], r"Since \d\d:\d\d Munich time\.$")
         self.assertEqual(self.poll().status, "ok")
         self.assertEqual(self.monitor.tracker.open, {}, "the outage is not reported again node by node")
 

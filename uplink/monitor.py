@@ -245,7 +245,7 @@ class Monitor:
             "event": "network_wide",
             "network": self.settings.network_name,
             "nodes_offline": vanished,
-            "started": clock(snapshot.taken_at, snapshot.taken_at),
+            "started": clock(snapshot.taken_at, snapshot.taken_at, self.settings.time_zone_label),
         }
         self._send_plain(facts, "network_wide")
         self._glitches = 0

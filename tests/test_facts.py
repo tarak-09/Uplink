@@ -3,9 +3,18 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 from uplink.correlate import Situation, correlate
-from uplink.facts import Namer, clock, find_nodes, network_facts, outage_facts
+from uplink.facts import (
+    Namer,
+    clock,
+    find_nodes,
+    network_facts,
+    outage_facts,
+    resolved_facts,
+    stale_feed_facts,
+)
 from uplink.incidents import Incident
-from uplink.templates import render_status
+from uplink.templates import render, render_status
+from uplink.writer import check_draft
 
 from .support import MUNICH, MeshBuilder, make_settings
 
@@ -90,6 +99,13 @@ class HelpersTest(unittest.TestCase):
         utc = datetime(2026, 11, 2, 6, 5, tzinfo=MUNICH.utc)
         self.assertEqual(clock(utc, reference), "07:05", "shown in the network's own time zone")
 
+    def test_clock_names_the_time_zone_when_given_a_label(self):
+        reference = datetime(2026, 11, 2, 9, 0, tzinfo=MUNICH)
+        self.assertEqual(clock(datetime(2026, 11, 2, 7, 5, tzinfo=MUNICH), reference, "Munich time"), "07:05 Munich time")
+        self.assertEqual(
+            clock(datetime(2026, 11, 1, 23, 30, tzinfo=MUNICH), reference, "Munich time"), "01/11 23:30 Munich time"
+        )
+
     def test_namer_falls_back_to_remembered_names(self):
         name = Namer({}, remembered={"abc123456": "Daniel5"})
         self.assertEqual(name("abc123456"), "Daniel5")
@@ -108,6 +124,48 @@ class HelpersTest(unittest.TestCase):
         self.assertEqual([n.name for n in find_nodes("what about the rathaus", snapshot)], ["Rathaus"])
         self.assertEqual([n.name for n in find_nodes("status of a1b2c3d4e5f6", snapshot)], ["ffNoe-Stadt-Daniel5"])
         self.assertEqual(find_nodes("is ffnoe stadt down?", snapshot), [], "common words match nothing")
+
+
+class TimeZoneLabelTest(unittest.TestCase):
+    """Every clock time a message can show names its time zone, so viewers elsewhere are not misled."""
+
+    def cascade(self):
+        mesh = MeshBuilder().gateway("gw").node("a", via="gw", clients=3).node("b", via="a").tick()
+        return incidents_in(mesh.drop("a", ago=40).drop("b", ago=30))
+
+    def test_outage_facts_and_the_alert_template(self):
+        (incident,), snapshot = self.cascade()
+        facts = outage_facts(incident, snapshot, SETTINGS)
+        self.assertEqual(facts["started"], "12:00 Munich time")
+        alert = render(facts, "english")
+        self.assertIn("Since 12:00 Munich time · Freifunk München · nodes offline: 2", alert)
+        self.assertIn("12:00 Munich time నుండి", render(facts, "telugu"))
+        self.assertEqual(check_draft(alert, facts, 700), "", "the label adds no numbers the check would refuse")
+
+    def test_answers_and_the_status_lines(self):
+        incidents, snapshot = self.cascade()
+        facts = network_facts(snapshot, incidents, [], SETTINGS, question="is b up?")
+        self.assertEqual(facts["as_of"], "12:01 Munich time")
+        self.assertEqual(facts["open_outages"][0]["started"], "12:00 Munich time")
+        self.assertRegex(facts["nodes_asked_about"][0]["last_heard"], r"^\d\d:\d\d Munich time$")
+        self.assertIn("• since 12:00 Munich time: a.home (nodes offline: 2)", render_status(facts, "english"))
+
+    def test_recoveries_feed_problems_and_evidence(self):
+        mesh = MeshBuilder().gateway("gw").gateway("gw2")
+        booted = mesh.now - timedelta(days=2)
+        mesh.node("p", via="gw", booted=booted).node("q", via="gw2", booted=booted + timedelta(seconds=25)).tick()
+        (incident,), snapshot = incidents_in(mesh.drop("p", "q", ago=30))
+        evidence = " ".join(outage_facts(incident, snapshot, SETTINGS)["evidence"])
+        self.assertRegex(evidence, r"within the same minute \(\d\d/\d\d \d\d:\d\d Munich time\)")
+        stale = stale_feed_facts(snapshot.taken_at, snapshot.taken_at + timedelta(minutes=20), SETTINGS)
+        self.assertEqual(stale["since"], "12:01 Munich time")
+        resolved = resolved_facts(incident, snapshot, SETTINGS)
+        self.assertEqual((resolved["started"], resolved["ended"]), ("12:00 Munich time", "12:01 Munich time"))
+
+    def test_the_label_is_a_setting(self):
+        (incident,), snapshot = self.cascade()
+        facts = outage_facts(incident, snapshot, make_settings(Path("."), time_zone_label="CET"))
+        self.assertEqual(facts["started"], "12:00 CET")
 
 
 class NetworkFactsTest(unittest.TestCase):

@@ -41,10 +41,14 @@ def namer_for(incident: Incident | None, snapshot: Snapshot, settings: Settings)
     return Namer(snapshot.nodes, settings.anonymize, remembered)
 
 
-def clock(moment: datetime, reference: datetime) -> str:
-    """ "16:15" on the reference day, "22/10 16:15" otherwise, in the network's own time zone."""
+def clock(moment: datetime, reference: datetime, label: str = "") -> str:
+    """ "16:15" on the reference day, "22/10 16:15" otherwise, in the network's own time zone.
+
+    Messages pass the TIME_ZONE_LABEL as `label` ("16:15 Munich time"), so readers elsewhere know whose clock it is.
+    """
     local = moment.astimezone(reference.tzinfo)
-    return f"{local:%H:%M}" if local.date() == reference.date() else f"{local:%d/%m %H:%M}"
+    shown = f"{local:%H:%M}" if local.date() == reference.date() else f"{local:%d/%m %H:%M}"
+    return f"{shown} {label}" if label else shown
 
 
 def minutes_between(start: datetime, end: datetime) -> int:
@@ -60,7 +64,7 @@ def outage_facts(incident: Incident, snapshot: Snapshot, settings: Settings) -> 
         "event": "outage",
         "network": settings.network_name,
         "kind": incident.kind,
-        "started": clock(incident.started_at, snapshot.taken_at),
+        "started": clock(incident.started_at, snapshot.taken_at, settings.time_zone_label),
         "nodes_offline": incident.size,
         "root": roots[0],
     }
@@ -77,7 +81,7 @@ def outage_facts(incident: Incident, snapshot: Snapshot, settings: Settings) -> 
     rerouted = rerouted_count(incident, snapshot, timedelta(seconds=settings.stale_after))
     if rerouted:
         facts["nodes_that_found_another_path"] = rerouted
-    evidence = evidence_lines(incident, name, snapshot, settings.anonymize)
+    evidence = evidence_lines(incident, name, snapshot, settings.anonymize, settings.time_zone_label)
     if evidence:
         facts["evidence"] = evidence
     facts["likely_cause"], facts["check_first"] = cause_and_check(
@@ -99,8 +103,8 @@ def resolved_facts(incident: Incident, snapshot: Snapshot, settings: Settings) -
         "network": settings.network_name,
         "kind": incident.kind,
         "root": name(root.id),
-        "started": clock(incident.started_at, snapshot.taken_at),
-        "ended": clock(ended, snapshot.taken_at),
+        "started": clock(incident.started_at, snapshot.taken_at, settings.time_zone_label),
+        "ended": clock(ended, snapshot.taken_at, settings.time_zone_label),
         "duration": duration(minutes, "english"),
         "duration_minutes": minutes,
         "nodes_back": len(back),
@@ -114,7 +118,11 @@ def resolved_facts(incident: Incident, snapshot: Snapshot, settings: Settings) -
 
 
 def stale_feed_facts(since: datetime, now: datetime, settings: Settings) -> dict[str, Any]:
-    return {"event": "feed_stale", "network": settings.network_name, "since": clock(since, now)}
+    return {
+        "event": "feed_stale",
+        "network": settings.network_name,
+        "since": clock(since, now, settings.time_zone_label),
+    }
 
 
 def network_facts(
@@ -130,7 +138,7 @@ def network_facts(
     finished = [i for i in recent_incidents if i.size > 1 or i.alerted_at]
     facts: dict[str, Any] = {
         "network": settings.network_name,
-        "as_of": clock(snapshot.taken_at, snapshot.taken_at),
+        "as_of": clock(snapshot.taken_at, snapshot.taken_at, settings.time_zone_label),
         "nodes_online": snapshot.reachable_count(stale),
         "nodes_total": len(snapshot.nodes),
         "people_online": snapshot.clients_online(stale),
@@ -169,7 +177,9 @@ def rerouted_count(incident: Incident, snapshot: Snapshot, stale_after: timedelt
     )
 
 
-def evidence_lines(incident: Incident, name: Namer, snapshot: Snapshot, anonymize: bool) -> list[str]:
+def evidence_lines(
+    incident: Incident, name: Namer, snapshot: Snapshot, anonymize: bool, time_zone_label: str = ""
+) -> list[str]:
     """Plain-English reasons, built from the evidence that grouped these failures."""
     evidence = incident.evidence
     kinds = {e.kind for e in evidence}
@@ -190,7 +200,7 @@ def evidence_lines(incident: Incident, name: Namer, snapshot: Snapshot, anonymiz
         lines.append(f"their names form one set{shown}")
     co_booted = [e for e in evidence if e.kind == "co_booted"]
     if co_booted:
-        when = clock(datetime.fromisoformat(min(e.detail for e in co_booted)), snapshot.taken_at)
+        when = clock(datetime.fromisoformat(min(e.detail for e in co_booted)), snapshot.taken_at, time_zone_label)
         together = {n for e in co_booted for n in (e.a, e.b)}
         if len(together) == incident.size:
             lines.append(f"they last booted within the same minute ({when}), so they likely share a power supply")
@@ -234,7 +244,7 @@ def _brief(incident: Incident, snapshot: Snapshot, settings: Settings) -> dict[s
     via_gateway = incident.anchor in incident.gateway_ids
     brief: dict[str, Any] = {
         "kind": incident.kind,
-        "started": clock(incident.started_at, snapshot.taken_at),
+        "started": clock(incident.started_at, snapshot.taken_at, settings.time_zone_label),
         "nodes": incident.size,
         "root": name(incident.roots[0]),
     }
@@ -244,7 +254,7 @@ def _brief(incident: Incident, snapshot: Snapshot, settings: Settings) -> dict[s
     if incident.users_known:
         brief["people_affected"] = incident.users
     if incident.resolved_at:
-        brief["ended"] = clock(incident.resolved_at, snapshot.taken_at)
+        brief["ended"] = clock(incident.resolved_at, snapshot.taken_at, settings.time_zone_label)
         brief["duration"] = duration(minutes_between(incident.started_at, incident.resolved_at), "english")
     else:
         brief["likely_cause"] = cause_and_check(incident.kind, brief["root"], anchor, via_gateway=via_gateway)[0]
@@ -256,7 +266,7 @@ def _node_brief(node: Node, snapshot: Snapshot, settings: Settings) -> dict[str,
     reachable = snapshot.is_reachable(node.id, timedelta(seconds=settings.stale_after))
     brief: dict[str, Any] = {"name": name(node.id), "online": reachable}
     if node.last_seen:
-        brief["last_heard"] = clock(node.last_seen, snapshot.taken_at)
+        brief["last_heard"] = clock(node.last_seen, snapshot.taken_at, settings.time_zone_label)
     if reachable:
         brief["people_connected"] = node.clients
     path = [name(hop.id) for hop in walk_upstream(snapshot.nodes, node.id)][:4]

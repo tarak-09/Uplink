@@ -300,6 +300,23 @@ class AnsweringTest(unittest.TestCase):
             self.telegram.texts(), ["<b>Freifunk München right now</b>\nNodes online: 2 of 2\nPeople connected: 3\nNo ongoing outages."]
         )
 
+    def test_a_follow_up_builds_on_the_last_answer(self):
+        self.meta.replies = ["No outages right now.", "ప్రస్తుతం అంతరాయాలు ఏవీ లేవు."]
+        self.telegram.push("what is down right now?")
+        self.telegram.push("can you say that in Telugu?")
+        self.assertEqual(self.poller.poll_once(), 2)
+        self.app.close()
+        self.assertEqual(self.telegram.texts(), ["No outages right now.", "ప్రస్తుతం అంతరాయాలు ఏవీ లేవు."])
+        follow_up = self.meta.chats()[1].json()["messages"]
+        self.assertEqual(
+            [(m["role"], m["content"]) for m in follow_up[2:]],
+            [
+                ("user", "what is down right now?"),
+                ("assistant", "No outages right now."),
+                ("user", "can you say that in Telugu?"),
+            ],
+        )
+
     def test_strangers_get_no_answer(self):
         self.telegram.push("status", chat_id=5550001)
         self.poller.poll_once()

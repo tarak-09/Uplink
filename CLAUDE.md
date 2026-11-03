@@ -64,8 +64,11 @@ built from each service's documentation. Check each on first contact, in this or
 
 1. **Live map**: verified on 3 Nov. `python3 -m uplink check` printed 2,087 nodes.
 2. **Muse Spark**: verified against the real API on 3 Nov (`POST {MODEL_BASE_URL}/chat/completions`,
-   bearer `MODEL_API_KEY`, body `model`, `messages` with developer/user roles, `max_completion_tokens`,
-   `reasoning_effort`; reply text at `choices[0].message.content`, and `finish_reason`).
+   bearer `MODEL_API_KEY`, body `model`, `messages` with developer/user roles (assistant too, for
+   follow-ups), `max_completion_tokens`, `reasoning_effort`; reply text at `choices[0].message.content`,
+   and `finish_reason`). Follow-ups too: with the chat's last exchange as earlier turns, "can you say that
+   in Telugu?" translated the last answer, numbers and "Munich time" intact, and "why is the sky blue?"
+   was declined.
    `python3 -m uplink analyze --file tests/fixtures/munich-2026-10-23.json --send --dry-run --pick 1`
    ends with "Alert written by muse" in English and Telugu. If it says "template (...)", the note in
    parentheses says why. Reasoning counts toward `max_completion_tokens` (about 830-950 tokens per alert

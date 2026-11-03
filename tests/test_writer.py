@@ -2,7 +2,7 @@ import unittest
 
 from uplink import templates
 from uplink.muse import ModelAPIError
-from uplink.writer import Writer, allowed_numbers, check_draft, numbers_in, tidy
+from uplink.writer import PROMPTS, Writer, allowed_numbers, check_draft, numbers_in, tidy
 
 from .support import ScriptedModel
 
@@ -127,6 +127,44 @@ class WriterTest(unittest.TestCase):
         model = ScriptedModel(["Nothing changed in the last 3 hours."])
         draft = Writer(model, language="english", network="N").answer("anything in the last 3 hours?", {}, "fallback")
         self.assertEqual(draft.source, "muse")
+
+
+class FollowUpTest(unittest.TestCase):
+    EARLIER = ("what is down right now?", "*Daniel5* is down since 16:15 Munich time: 7 nodes, 23 people.")
+    TELUGU = "*Daniel5* 16:15 Munich time నుండి ఆఫ్‌లైన్‌లో ఉంది: 7 నోడ్‌లు, 23 మంది."
+
+    def ask(self, model: ScriptedModel, question: str, earlier=EARLIER):
+        return Writer(model, language="english", network="N").answer(question, {}, "fallback", earlier=earlier)
+
+    def test_the_last_exchange_comes_before_the_question(self):
+        model = ScriptedModel([self.TELUGU])
+        draft = self.ask(model, "can you say that in Telugu?")
+        self.assertEqual((draft.text, draft.source), (self.TELUGU, "muse"), "its numbers pass the check")
+        self.assertEqual(
+            [(m["role"], m["content"]) for m in model.calls[0][2:]],
+            [("user", self.EARLIER[0]), ("assistant", self.EARLIER[1]), ("user", "can you say that in Telugu?")],
+        )
+
+    def test_without_it_the_same_numbers_are_refused(self):
+        model = ScriptedModel([self.TELUGU, self.TELUGU])
+        self.assertEqual(self.ask(model, "can you say that in Telugu?", earlier=None).source, "template")
+
+    def test_a_follow_up_still_may_not_invent_numbers(self):
+        model = ScriptedModel(["7 నోడ్‌లు, 99 మంది.", "7 నోడ్‌లు, 99 మంది."])
+        draft = self.ask(model, "can you say that in Telugu?")
+        self.assertEqual(draft.source, "template")
+        self.assertIn("99", draft.note)
+
+    def test_other_topics_are_still_declined(self):
+        prompt = Writer(None, language="english", network="Freifunk München")._format(PROMPTS["answer"], "english")
+        self.assertIn("translate your last answer", prompt)
+        self.assertIn(
+            "Questions that are not about Freifunk München are not yours to answer, even after an exchange", prompt
+        )
+        self.assertIn("in the language the volunteer asks for", prompt)
+        decline = 'I only answer questions about N. Send "status" for a summary.'
+        model = ScriptedModel([decline])
+        self.assertEqual(self.ask(model, "why is the sky blue?").text, decline)
 
 
 class TemplateTest(unittest.TestCase):
