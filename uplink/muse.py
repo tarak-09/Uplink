@@ -30,7 +30,9 @@ class MetaModelAPI:
         model: str = "muse-spark-1.3",
         asr_model: str = "muse-voice-transcribe-1.0",
         reasoning_effort: str = "low",
-        max_completion_tokens: int = 1024,
+        # A cap, not a target. Reasoning counts toward it: at "low" Muse Spark spent 827-952 tokens
+        # reasoning about one alert, so a 1024 cap cut alerts off (Telugu often before any text).
+        max_completion_tokens: int = 4096,
     ) -> None:
         if not api_key:
             raise ValueError("an API key is required")
@@ -56,7 +58,7 @@ class MetaModelAPI:
             )
         except TransportError as exc:
             raise ModelAPIError(_explain(exc)) from None
-        return _reply_text(data)
+        return _reply_text(data, self.max_completion_tokens)
 
     def transcribe(self, wav: bytes, *, languages: Sequence[str] = (), keywords: Sequence[str] = ()) -> Transcript:
         """Transcribe a mono 16-bit WAV (16 or 24 kHz)."""
@@ -90,11 +92,14 @@ class MetaModelAPI:
         )
 
 
-def _reply_text(data: Any) -> str:
+def _reply_text(data: Any, limit: int) -> str:
     try:
-        content = data["choices"][0]["message"]["content"]
+        choice = data["choices"][0]
+        content = choice["message"]["content"]
     except (KeyError, IndexError, TypeError):
         raise ModelAPIError("the reply had no choices[0].message.content") from None
+    if choice.get("finish_reason") == "length":  # half an alert can still pass the draft check
+        raise ModelAPIError(f"the reply was cut off at the {limit}-token limit (reasoning counts toward it)")
     if isinstance(content, list):  # some OpenAI-compatible servers return content parts
         content = "".join(part.get("text", "") for part in content if isinstance(part, dict))
     if not isinstance(content, str):

@@ -18,6 +18,9 @@ from .muse import ModelAPIError
 
 LANGUAGE_NAMES = {"english": "English", "telugu": "Telugu", "hindi": "Hindi"}
 DEFAULT_MAX_CHARS = 700
+# Bold with spaces just inside the stars ("* text *"), which WhatsApp shows as plain text. The opening
+# star must start a word and the closing one end it, so list bullets ("* site-bca3") are left alone.
+_SPACED_BOLD = re.compile(r"(?<!\S)\*[^\S\n]*([^\s*][^*\n]*?)[^\S\n]*\*(?!\w)")
 
 STYLE_RULES = """\
 Rules:
@@ -126,11 +129,12 @@ class Writer:
 
 
 def tidy(draft: str) -> str:
-    """Undo common markdown habits: **bold** becomes WhatsApp's *bold*, headings lose their #."""
+    """Undo common markdown habits: **bold** and * bold * become WhatsApp's *bold*, headings lose their #."""
     draft = draft.strip()
     if len(draft) >= 2 and draft[0] == draft[-1] == '"':
         draft = draft[1:-1].strip()
     draft = re.sub(r"\*\*(.+?)\*\*", r"*\1*", draft)
+    draft = _SPACED_BOLD.sub(r"*\1*", draft)
     draft = re.sub(r"(?m)^#{1,6}\s*", "", draft)
     return draft.strip()
 

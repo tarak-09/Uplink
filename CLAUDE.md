@@ -51,18 +51,22 @@ the WhatsApp Cloud API delivers them. README.md explains the design.
 (questions), `store.py` (data folder), `report.py`, `config.py`, `app.py` (wiring), `cli.py`.
 `tests/support.py` holds the mesh builder and the fake map, Meta and WhatsApp servers.
 
-## Not yet tried against the real services
+## Checks against the real services
 
 The code was written without network access to Meta, WhatsApp or the live map. The tests use fakes
 built from Meta's documentation. Check each on first contact, in this order:
 
-1. **Live map**: `python3 -m uplink check` should print about 2,100 nodes.
-2. **Muse Spark** (`POST {MODEL_BASE_URL}/chat/completions`, bearer `MODEL_API_KEY`, body `model`,
-   `messages` with developer/user roles, `max_completion_tokens`, `reasoning_effort`; reply text at
-   `choices[0].message.content`): `python3 -m uplink analyze --file tests/fixtures/munich-2026-10-23.json --send --dry-run --pick 1`
-   must end with "Alert written by muse". If it says "template (...)", the note in parentheses says why.
-3. **WhatsApp** (Graph API `v26.0` unless `WHATSAPP_API_VERSION` says otherwise): `send-test --template`,
-   then `send-test` after the user has sent "hi" to the test number.
+1. **Live map**: verified on 3 Nov. `python3 -m uplink check` printed 2,087 nodes.
+2. **Muse Spark**: verified against the real API on 3 Nov (`POST {MODEL_BASE_URL}/chat/completions`,
+   bearer `MODEL_API_KEY`, body `model`, `messages` with developer/user roles, `max_completion_tokens`,
+   `reasoning_effort`; reply text at `choices[0].message.content`, and `finish_reason`).
+   `python3 -m uplink analyze --file tests/fixtures/munich-2026-10-23.json --send --dry-run --pick 1`
+   ends with "Alert written by muse" in English and Telugu. If it says "template (...)", the note in
+   parentheses says why. Reasoning counts toward `max_completion_tokens` (about 830-950 tokens per alert
+   at `low`), so the cap is 4096 and a reply cut off with `finish_reason: "length"` falls back to the template.
+3. **WhatsApp** (Graph API `v26.0` unless `WHATSAPP_API_VERSION` says otherwise): skip `send-test --template`,
+   also where docs/WHATSAPP_SETUP.md suggests it. This account got Meta's newer sample templates, so
+   `hello_world` may not exist. Use `send-test` after the user has replied "hi" to the test number.
 4. **Muse Voice Transcribe** (`POST {MODEL_BASE_URL}/asr/transcribe`, multipart: a `request` JSON part
    with `model`, `audioEncoding: "WAV"`, `mode: "PUSH_TO_TALK"`, `languageBias`, `keywords`, plus an
    `audio` WAV part): `python3 -m uplink ask --audio <a voice note file>`.

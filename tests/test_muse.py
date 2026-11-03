@@ -28,7 +28,7 @@ class ChatTest(unittest.TestCase):
         body = request.json()
         self.assertEqual(body["model"], "muse-spark-1.3")
         self.assertEqual(body["reasoning_effort"], "minimal")
-        self.assertEqual(body["max_completion_tokens"], 1024)
+        self.assertEqual(body["max_completion_tokens"], 4096, "room for reasoning plus a Telugu alert")
         self.assertEqual([m["role"] for m in body["messages"]], ["developer", "user"])
         for unsupported in ("temperature", "stop", "n", "logprobs", "frequency_penalty", "presence_penalty"):
             self.assertNotIn(unsupported, body)
@@ -59,6 +59,30 @@ class ChatTest(unittest.TestCase):
                 client(meta).chat([{"role": "user", "content": "q"}])
             self.assertEqual(len(meta.chats()), 1, "client errors are not retried")
         self.assertIn("not supported", str(caught.exception))
+
+    def test_a_reply_cut_off_at_the_token_limit_is_an_error(self):
+        # Muse Spark's real replies to the Telugu cascade alert with a 1024-token cap: reasoning took
+        # 952 tokens, and the text stopped mid-name, or never started.
+        for content in ("*site-bcg5 వైఫల్యం, 7 నోడ్లు ఆఫ్‌లైన్*\n\n22/10 16:15 నుండి 7 నోడ్లు ఆఫ్‌లైన్: site-b", None):
+            with self.subTest(content=content), FakeMeta() as meta:
+                meta.replies = [
+                    json_reply(
+                        {
+                            "choices": [
+                                {
+                                    "index": 0,
+                                    "message": {"role": "assistant", "content": content, "refusal": None},
+                                    "finish_reason": "length",
+                                }
+                            ],
+                            "usage": {"completion_tokens": 1024, "completion_tokens_details": {"reasoning_tokens": 952}},
+                        }
+                    )
+                ]
+                with self.assertRaises(ModelAPIError) as caught:
+                    client(meta, max_completion_tokens=1024).chat([{"role": "user", "content": "q"}])
+                self.assertIn("cut off at the 1024-token limit", str(caught.exception))
+                self.assertEqual(len(meta.chats()), 1, "not retried: the same cap would cut it off again")
 
     def test_malformed_replies_are_errors(self):
         for body in ({"choices": []}, {"nothing": 1}, {"choices": [{"message": {"content": 5}}]}):

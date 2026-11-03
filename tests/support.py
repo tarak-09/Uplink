@@ -298,7 +298,18 @@ class FakeMeta(FakeServer):
             return reply
         text = reply(request) if callable(reply) else reply
         return json_reply(
-            {"id": "chatcmpl-1", "choices": [{"index": 0, "message": {"role": "assistant", "content": text}}]}
+            {
+                "id": "chatcmpl-1",
+                "object": "chat.completion",
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {"role": "assistant", "content": text, "refusal": None},
+                        "logprobs": None,
+                        "finish_reason": "stop",
+                    }
+                ],
+            }
         )
 
     def _transcribe(self, request: Recorded, _: re.Match) -> Reply:

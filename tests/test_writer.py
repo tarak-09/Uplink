@@ -57,6 +57,19 @@ class DraftCheckTest(unittest.TestCase):
     def test_tidy_turns_markdown_into_whatsapp(self):
         self.assertEqual(tidy('"## Alert\n**Daniel5 is down**"'), "Alert\n*Daniel5 is down*")
 
+    def test_tidy_closes_up_spaces_inside_bold(self):
+        # A real Muse Spark headline. WhatsApp shows "* text *" as plain text with stars around it.
+        self.assertEqual(
+            tidy("* Cascade outage: site-bcg5 plus 6 nodes offline *\n7 nodes offline since 22/10 16:15."),
+            "*Cascade outage: site-bcg5 plus 6 nodes offline*\n7 nodes offline since 22/10 16:15.",
+        )
+        self.assertEqual(tidy("** site-bcg5 ఆఫ్‌లైన్ **"), "*site-bcg5 ఆఫ్‌లైన్*")
+        self.assertEqual(tidy("Root *site-bcg5 * is down, check * power*."), "Root *site-bcg5* is down, check *power*.")
+        # Not bold, so left alone: list bullets, including one whose line ends in real bold.
+        for untouched in ("* site-bca3\n* site-bca5", "* Check first: power at *site-bcg5*", "*7 nodes* offline"):
+            with self.subTest(untouched=untouched):
+                self.assertEqual(tidy(untouched), untouched)
+
 
 class WriterTest(unittest.TestCase):
     def test_uses_the_model_draft_when_it_checks_out(self):
