@@ -14,7 +14,8 @@ from .muse import MetaModelAPI
 from .server import WebhookApp
 from .store import Store
 from .transport import Transport
-from .whatsapp import WhatsAppClient
+from .twilio import TwilioWhatsApp
+from .whatsapp import Messenger, WhatsAppClient
 from .writer import Writer
 
 
@@ -36,7 +37,18 @@ def make_model(settings: Settings, transport: Transport) -> MetaModelAPI | None:
     )
 
 
-def make_whatsapp(settings: Settings, transport: Transport) -> WhatsAppClient | None:
+def make_whatsapp(settings: Settings, transport: Transport) -> Messenger | None:
+    """The configured WhatsApp provider, or None while its credentials are missing."""
+    if settings.uses_twilio:
+        if not (settings.twilio_account_sid and settings.twilio_auth_token):
+            return None
+        return TwilioWhatsApp(
+            account_sid=settings.twilio_account_sid,
+            auth_token=settings.twilio_auth_token,
+            transport=transport,
+            sender=settings.twilio_whatsapp_from,
+            base_url=settings.twilio_base_url,
+        )
     if not (settings.whatsapp_token and settings.whatsapp_phone_number_id):
         return None
     return WhatsAppClient(
@@ -52,13 +64,13 @@ def make_writer(settings: Settings, model: MetaModelAPI | None) -> Writer:
     return Writer(model, language=settings.language, network=settings.network_name)
 
 
-def make_sender(settings: Settings, whatsapp: WhatsAppClient | None, *, dry_run: bool) -> Sender:
+def make_sender(settings: Settings, whatsapp: Messenger | None, *, dry_run: bool) -> Sender:
     if dry_run or whatsapp is None or not settings.whatsapp_to:
         return ConsoleSender()
     return WhatsAppSender(
         whatsapp,
         settings.whatsapp_to,
-        template=settings.whatsapp_alert_template,
+        template="" if settings.uses_twilio else settings.whatsapp_alert_template,
         template_language=settings.whatsapp_template_language,
     )
 
@@ -91,7 +103,7 @@ def make_webhook(settings: Settings, *, store: Store | None = None, transport: T
     transport = transport or make_transport(settings)
     whatsapp = make_whatsapp(settings, transport)
     if whatsapp is None:
-        raise ValueError("the webhook needs WHATSAPP_TOKEN and WHATSAPP_PHONE_NUMBER_ID")
+        raise ValueError("the webhook needs " + ", ".join(settings.missing_for_webhook()))
     store = store or Store(settings.data_dir)
     model = make_model(settings, transport)
     return WebhookApp(

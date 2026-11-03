@@ -16,6 +16,7 @@ from .support import (
     FakeFeed,
     FakeGraph,
     FakeMeta,
+    FakeTwilio,
     MeshBuilder,
     json_reply,
     make_settings,
@@ -38,6 +39,7 @@ class MonitorTestCase(unittest.TestCase):
         self.feed = FakeFeed().__enter__()
         self.meta = FakeMeta().__enter__()
         self.graph = FakeGraph().__enter__()
+        self.twilio = FakeTwilio().__enter__()
         self.meta.default_reply = faithful_reply
         self.clock = Clock()
         self.mesh = (
@@ -54,6 +56,7 @@ class MonitorTestCase(unittest.TestCase):
             model_api_key="key-123",
             model_base_url=self.meta.base_url,
             graph_base_url=self.graph.url,
+            twilio_base_url=self.twilio.url,
             record_snapshots=True,
             **self.settings_overrides,
         )
@@ -61,7 +64,7 @@ class MonitorTestCase(unittest.TestCase):
         self.monitor = self.new_monitor()
 
     def tearDown(self):
-        for fake in (self.feed, self.meta, self.graph):
+        for fake in (self.feed, self.meta, self.graph, self.twilio):
             fake.__exit__()
         self.folder.cleanup()
 
@@ -174,6 +177,29 @@ class TemplateModeTest(MonitorTestCase):
         self.assertEqual(
             template["components"][0]["parameters"][0]["text"], "*a.home is down* · 2 nodes offline since 12:00."
         )
+
+
+class TwilioModeTest(MonitorTestCase):
+    settings_overrides: ClassVar[dict[str, str]] = {
+        "whatsapp_provider": "twilio",
+        "twilio_account_sid": FakeTwilio.account_sid,
+        "twilio_auth_token": FakeTwilio.auth_token,
+        "whatsapp_alert_template": "ignored_by_the_sandbox",
+    }
+
+    def test_alerts_and_recoveries_go_through_the_sandbox(self):
+        self.poll()
+        self.mesh.drop("a", "b", ago=40)
+        self.poll()
+        self.assertEqual(self.poll().sent, 1)
+        self.mesh.restore("a", "b")
+        self.assertEqual(self.poll().sent, 1)
+        self.assertEqual(
+            self.twilio.bodies(),
+            ["*a.home is down*\n2 nodes offline since 12:00.", "*Back online: a.home*\nIt lasted 3 min."],
+        )
+        self.assertEqual({m["To"] for m in self.twilio.sent()}, {"whatsapp:+4915112345678"})
+        self.assertEqual(self.graph.sent(), [])
 
 
 class FeedHealthTest(MonitorTestCase):

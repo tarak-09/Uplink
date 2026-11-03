@@ -16,7 +16,7 @@ from .feed import Feed, FeedError
 from .incidents import Change, IncidentTracker, Notice, Policy
 from .mesh import Snapshot
 from .store import Store
-from .whatsapp import WhatsAppClient, WhatsAppError
+from .whatsapp import Messenger, WhatsAppError
 from .writer import Writer
 
 log = logging.getLogger(__name__)
@@ -45,7 +45,7 @@ class Sender(Protocol):
 
 
 class WhatsAppSender:
-    def __init__(self, client: WhatsAppClient, to: str, *, template: str = "", template_language: str = "en") -> None:
+    def __init__(self, client: Messenger, to: str, *, template: str = "", template_language: str = "en") -> None:
         self.client = client
         self.to = to
         self.template = template

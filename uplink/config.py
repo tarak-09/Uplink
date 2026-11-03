@@ -11,6 +11,7 @@ from urllib.parse import urlparse
 
 LANGUAGES = {"english": "english", "en": "english", "telugu": "telugu", "te": "telugu", "hindi": "hindi", "hi": "hindi"}
 REASONING_EFFORTS = ("minimal", "low", "medium", "high", "xhigh")
+PROVIDERS = ("cloud", "twilio")
 MIN_POLL_SECONDS = 60
 _LOCAL_HOSTS = {"localhost", "127.0.0.1", "::1"}
 
@@ -44,6 +45,9 @@ class Settings:
     reasoning_effort: str = "low"
     asr_model: str = "muse-voice-transcribe-1.0"
 
+    # WhatsApp: the Cloud API ("cloud") or Twilio's sandbox ("twilio")
+    whatsapp_provider: str = "cloud"
+
     # WhatsApp Cloud API
     whatsapp_token: str = field(default="", repr=False)
     whatsapp_phone_number_id: str = ""
@@ -54,6 +58,13 @@ class Settings:
     whatsapp_alert_template: str = ""
     whatsapp_template_language: str = "en"
     graph_base_url: str = "https://graph.facebook.com"
+
+    # Twilio Sandbox for WhatsApp
+    twilio_account_sid: str = ""
+    twilio_auth_token: str = field(default="", repr=False)
+    twilio_whatsapp_from: str = "14155238886"
+    twilio_webhook_url: str = ""
+    twilio_base_url: str = "https://api.twilio.com"
 
     # Running
     data_dir: Path = Path("data")
@@ -67,8 +78,32 @@ class Settings:
         return bool(self.model_api_key)
 
     @property
+    def uses_twilio(self) -> bool:
+        return self.whatsapp_provider == "twilio"
+
+    @property
     def has_whatsapp(self) -> bool:
-        return bool(self.whatsapp_token and self.whatsapp_phone_number_id and self.whatsapp_to)
+        return not self.missing_for_alerts()
+
+    def missing_for_alerts(self) -> list[str]:
+        """The variables still needed before alerts can reach WHATSAPP_TO."""
+        if self.uses_twilio:
+            needed = {"TWILIO_ACCOUNT_SID": self.twilio_account_sid, "TWILIO_AUTH_TOKEN": self.twilio_auth_token}
+        else:
+            needed = {"WHATSAPP_TOKEN": self.whatsapp_token, "WHATSAPP_PHONE_NUMBER_ID": self.whatsapp_phone_number_id}
+        needed["WHATSAPP_TO"] = self.whatsapp_to
+        return [name for name, value in needed.items() if not value]
+
+    def missing_for_webhook(self) -> list[str]:
+        """The variables still needed before Uplink can answer messages."""
+        missing = self.missing_for_alerts()
+        if not self.uses_twilio:
+            extra = {
+                "WHATSAPP_APP_SECRET": self.whatsapp_app_secret,
+                "WHATSAPP_VERIFY_TOKEN": self.whatsapp_verify_token,
+            }
+            missing += [name for name, value in extra.items() if not value]
+        return missing
 
     @property
     def feed_is_local(self) -> bool:
@@ -83,6 +118,10 @@ class Settings:
             )
         if self.stale_after < 90:
             raise ConfigError("STALE_AFTER_SECONDS must be at least 90; nodes answer about once a minute.")
+        if self.whatsapp_provider not in PROVIDERS:
+            raise ConfigError(
+                "WHATSAPP_PROVIDER must be cloud (Meta's WhatsApp Cloud API) or twilio (Twilio's sandbox)"
+            )
         if self.reasoning_effort not in REASONING_EFFORTS:
             raise ConfigError(f"MODEL_REASONING_EFFORT must be one of: {', '.join(REASONING_EFFORTS)}")
         if not re.fullmatch(r"v\d+\.\d+", self.whatsapp_api_version):
@@ -197,6 +236,7 @@ _VARIABLES: dict[str, tuple[str, Callable[[str], Any]]] = {
     "MODEL_NAME": ("model_name", str),
     "MODEL_REASONING_EFFORT": ("reasoning_effort", str.lower),
     "ASR_MODEL": ("asr_model", str),
+    "WHATSAPP_PROVIDER": ("whatsapp_provider", str.lower),
     "WHATSAPP_TOKEN": ("whatsapp_token", str),
     "WHATSAPP_PHONE_NUMBER_ID": ("whatsapp_phone_number_id", str),
     "WHATSAPP_TO": ("whatsapp_to", _phone),
@@ -206,6 +246,11 @@ _VARIABLES: dict[str, tuple[str, Callable[[str], Any]]] = {
     "WHATSAPP_ALERT_TEMPLATE": ("whatsapp_alert_template", str),
     "WHATSAPP_TEMPLATE_LANGUAGE": ("whatsapp_template_language", str),
     "GRAPH_BASE_URL": ("graph_base_url", _url),
+    "TWILIO_ACCOUNT_SID": ("twilio_account_sid", str),
+    "TWILIO_AUTH_TOKEN": ("twilio_auth_token", str),
+    "TWILIO_WHATSAPP_FROM": ("twilio_whatsapp_from", _phone),
+    "TWILIO_WEBHOOK_URL": ("twilio_webhook_url", _url),
+    "TWILIO_BASE_URL": ("twilio_base_url", _url),
     "DATA_DIR": ("data_dir", Path),
     "RECORD_SNAPSHOTS": ("record_snapshots", _boolean),
     "WEBHOOK_HOST": ("webhook_host", str),

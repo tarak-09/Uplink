@@ -101,6 +101,24 @@ class ValidationTest(unittest.TestCase):
         self.assertTrue(settings.has_model)
         self.assertFalse(settings.has_whatsapp)
 
+    def test_the_whatsapp_provider(self):
+        with self.assertRaises(ConfigError) as caught:
+            load_settings({"WHATSAPP_PROVIDER": "signal"}, None)
+        self.assertIn("WHATSAPP_PROVIDER", str(caught.exception))
+        cloud = load_settings({"WHATSAPP_TO": "4915112345678"}, None)
+        self.assertFalse(cloud.uses_twilio)
+        self.assertEqual(cloud.missing_for_alerts(), ["WHATSAPP_TOKEN", "WHATSAPP_PHONE_NUMBER_ID"])
+        self.assertEqual(cloud.missing_for_webhook()[-2:], ["WHATSAPP_APP_SECRET", "WHATSAPP_VERIFY_TOKEN"])
+        twilio = load_settings(
+            {"WHATSAPP_PROVIDER": "Twilio", "TWILIO_ACCOUNT_SID": "AC1", "WHATSAPP_TO": "+1 415 555 0123"}, None
+        )
+        self.assertTrue(twilio.uses_twilio)
+        self.assertEqual(twilio.missing_for_alerts(), ["TWILIO_AUTH_TOKEN"])
+        self.assertEqual(
+            twilio.missing_for_webhook(), ["TWILIO_AUTH_TOKEN"], "Twilio needs no app secret or verify token"
+        )
+        self.assertEqual(twilio.twilio_whatsapp_from, "14155238886")
+
     def test_secrets_stay_out_of_repr(self):
         settings = load_settings(
             {
@@ -112,7 +130,7 @@ class ValidationTest(unittest.TestCase):
             None,
         )
         text = repr(settings)
-        for secret in ("sk-secret-1", "EAAG-secret-2", "secret-3", "secret-4"):
+        for secret in ("sk-secret-1", "EAAG-secret-2", "secret-3", "secret-4", "secret-5"):
             self.assertNotIn(secret, text)
 
 

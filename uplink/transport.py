@@ -142,12 +142,18 @@ class Transport:
         return self.request(method, url, headers=all_headers, body=body, **options).json()
 
     def _send(self, method: str, url: str, headers: Mapping[str, str], body: bytes | None, timeout: float) -> Response:
+        plain = {k: v for k, v in headers.items() if k.lower() != "authorization"}
         request = urllib.request.Request(
             url,
             data=body,
             method=method.upper(),
-            headers={"User-Agent": self.user_agent, "Accept-Encoding": "gzip", **headers},
+            headers={"User-Agent": self.user_agent, "Accept-Encoding": "gzip", **plain},
         )
+        for key, value in headers.items():
+            if key.lower() == "authorization":
+                # Sent to this host only: urllib copies ordinary headers onto redirects, and a
+                # media download that redirects to cloud storage must not carry our credentials.
+                request.add_unredirected_header("Authorization", value)
         label = f"{method.upper()} {_redact(url)}"
         try:
             with self._opener.open(request, timeout=timeout) as response:

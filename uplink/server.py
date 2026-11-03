@@ -1,7 +1,8 @@
 """The WhatsApp webhook: verified requests in, answers (typed or spoken questions) out.
 
-Meta expects a fast 200, so requests are checked and queued, and a worker thread does the
-slow part: downloading voice notes, transcribing, asking Muse Spark, replying.
+`/webhook` takes Meta's Cloud API calls, `/twilio` takes Twilio's sandbox calls. Both expect a
+fast answer, so requests are checked and queued, and a worker thread does the slow part:
+downloading voice notes, transcribing, asking Muse Spark, replying.
 """
 
 from __future__ import annotations
@@ -22,11 +23,12 @@ from .assistant import Assistant
 from .config import Settings
 from .muse import MetaModelAPI, ModelAPIError
 from .store import Store
+from .twilio import parse_twilio_webhook, verify_twilio_signature
 from .voice import AudioError, ffmpeg_available, to_wav
 from .whatsapp import (
     DeliveryStatus,
     InboundMessage,
-    WhatsAppClient,
+    Messenger,
     WhatsAppError,
     normalize_number,
     parse_webhook,
@@ -37,6 +39,7 @@ from .writer import Draft
 log = logging.getLogger(__name__)
 
 MAX_BODY = 1024 * 1024
+EMPTY_TWIML = '<?xml version="1.0" encoding="UTF-8"?><Response></Response>'
 ASR_LANGUAGES = {
     "english": ["English", "Telugu", "Hindi"],
     "telugu": ["Telugu", "English"],
@@ -50,7 +53,7 @@ class WebhookApp:
         self,
         *,
         settings: Settings,
-        whatsapp: WhatsAppClient,
+        whatsapp: Messenger,
         assistant: Assistant,
         store: Store,
         model: MetaModelAPI | None = None,
@@ -97,16 +100,33 @@ class WebhookApp:
         for status in statuses:
             self._note_status(status)
         for message in messages:
-            if self._already_seen(message.id):
-                continue  # Meta retries deliveries it thinks failed
-            if message.sender not in self._allowed:
-                log.info("ignored a message from a number that is not WHATSAPP_TO")
-                continue
-            try:
-                self._queue.put_nowait(message)
-            except queue.Full:
-                log.warning("reply queue is full; dropped a message")
+            self._enqueue(message)
         return 200
+
+    def receive_twilio(self, body: bytes, url: str, signature: str | None) -> int:
+        """Accept a call from Twilio's sandbox. `url` must be the public URL Twilio called."""
+        try:
+            params = parse_qsl(body.decode("utf-8"), keep_blank_values=True)
+        except UnicodeDecodeError:
+            return 400
+        if not verify_twilio_signature(self.settings.twilio_auth_token, url, params, signature):
+            log.warning("rejected a Twilio call with a missing or wrong signature (checked against %s)", url)
+            return 403
+        message = parse_twilio_webhook(dict(params))
+        if message is not None:
+            self._enqueue(message)
+        return 200
+
+    def _enqueue(self, message: InboundMessage) -> None:
+        if self._already_seen(message.id):
+            return  # providers retry deliveries they think failed
+        if message.sender not in self._allowed:
+            log.info("ignored a message from a number that is not WHATSAPP_TO")
+            return
+        try:
+            self._queue.put_nowait(message)
+        except queue.Full:
+            log.warning("reply queue is full; dropped a message")
 
     def handle(self, message: InboundMessage) -> None:
         self.store.write_json("inbox.json", {"last_inbound_at": self._clock().isoformat(timespec="seconds")})
@@ -182,7 +202,8 @@ def make_server(app: WebhookApp, host: str, port: int) -> ThreadingHTTPServer:
                 self._reply(404, "not found")
 
         def do_POST(self) -> None:
-            if urlsplit(self.path).path != "/webhook":
+            path = urlsplit(self.path).path
+            if path not in {"/webhook", "/twilio"}:
                 self._reply(404, "not found")
                 return
             try:
@@ -192,13 +213,26 @@ def make_server(app: WebhookApp, host: str, port: int) -> ThreadingHTTPServer:
             if not 0 < length <= MAX_BODY:
                 self._reply(413 if length > MAX_BODY else 400, "bad request")
                 return
-            status = app.receive(self.rfile.read(length), self.headers.get("X-Hub-Signature-256"))
+            body = self.rfile.read(length)
+            if path == "/twilio":
+                status = app.receive_twilio(body, self._public_url(), self.headers.get("X-Twilio-Signature"))
+                self._reply(status, EMPTY_TWIML if status == 200 else "rejected", "text/xml")
+                return
+            status = app.receive(body, self.headers.get("X-Hub-Signature-256"))
             self._reply(status, "ok" if status == 200 else "rejected")
 
-        def _reply(self, status: int, text: str) -> None:
+        def _public_url(self) -> str:
+            """The URL Twilio signed: as configured, or as seen through the tunnel."""
+            if app.settings.twilio_webhook_url:
+                return app.settings.twilio_webhook_url
+            proto = self.headers.get("X-Forwarded-Proto", "https")
+            host = self.headers.get("X-Forwarded-Host") or self.headers.get("Host", "")
+            return f"{proto}://{host}{self.path}"
+
+        def _reply(self, status: int, text: str, content_type: str = "text/plain") -> None:
             body = text.encode("utf-8")
             self.send_response(status)
-            self.send_header("Content-Type", "text/plain; charset=utf-8")
+            self.send_header("Content-Type", f"{content_type}; charset=utf-8")
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
             self.wfile.write(body)

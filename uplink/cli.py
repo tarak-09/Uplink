@@ -14,7 +14,7 @@ import threading
 import time
 from datetime import timedelta
 from pathlib import Path
-from typing import Any, Callable, Sequence
+from typing import Callable, Sequence
 
 from . import __version__, templates
 from .app import (
@@ -258,7 +258,8 @@ def cmd_ask(args: argparse.Namespace, settings: Settings) -> int:
 def cmd_send_test(args: argparse.Namespace, settings: Settings) -> int:
     whatsapp = make_whatsapp(settings, make_transport(settings))
     if whatsapp is None or not settings.whatsapp_to:
-        raise ConfigError("set WHATSAPP_TOKEN, WHATSAPP_PHONE_NUMBER_ID and WHATSAPP_TO (see docs/WHATSAPP_SETUP.md)")
+        missing = ", ".join(settings.missing_for_alerts())
+        raise ConfigError(f"set {missing} (see docs/WHATSAPP_SETUP.md)")
     try:
         if args.template:
             ref = whatsapp.send_template(settings.whatsapp_to, "hello_world", "en_US")
@@ -270,11 +271,16 @@ def cmd_send_test(args: argparse.Namespace, settings: Settings) -> int:
             print(f"What to do: {exc.hint}")
         return 1
     print(f"WhatsApp accepted the message (id {ref}).")
-    if not args.template:
+    if settings.uses_twilio:
         print(
-            "If it does not arrive within a minute, WhatsApp dropped it after accepting it. The usual reason:\n"
-            'your number has not messaged the business number in the last 24 hours. Send it "hi" on\n'
-            "WhatsApp and try again, or test with --template, which always works."
+            "If it does not arrive within a minute: from WhatsApp, send your join code to +1 415 523 8886\n"
+            "(the sandbox forgets you after three days), or any message if you joined earlier, then try again."
+        )
+    else:
+        print(
+            "If it does not arrive within a minute, WhatsApp dropped it after accepting it. To see why, open the\n"
+            "app dashboard, WhatsApp > Try it out > Check test webhooks, and read the newest status. The usual\n"
+            'reason is that your number has not messaged the test number in 24 hours: send it "hi" and try again.'
         )
     return 0
 
@@ -350,18 +356,9 @@ def _send_alert(incident: Incident, snapshot: Snapshot, settings: Settings, *, d
 
 
 def _setup_status(settings: Settings) -> list[tuple[str, str]]:
-    def missing(*pairs: tuple[str, Any]) -> list[str]:
-        return [name for name, value in pairs if not value]
-
-    whatsapp_missing = missing(
-        ("WHATSAPP_TOKEN", settings.whatsapp_token),
-        ("WHATSAPP_PHONE_NUMBER_ID", settings.whatsapp_phone_number_id),
-        ("WHATSAPP_TO", settings.whatsapp_to),
-    )
-    webhook_missing = missing(
-        ("WHATSAPP_APP_SECRET", settings.whatsapp_app_secret),
-        ("WHATSAPP_VERIFY_TOKEN", settings.whatsapp_verify_token),
-    )
+    provider = "Twilio sandbox" if settings.uses_twilio else "Cloud API"
+    alerts_missing = settings.missing_for_alerts()
+    webhook_missing = [name for name in settings.missing_for_webhook() if name not in alerts_missing]
     return [
         (
             "Muse Spark",
@@ -371,9 +368,9 @@ def _setup_status(settings: Settings) -> list[tuple[str, str]]:
         ),
         (
             "WhatsApp",
-            f"ready, alerts go to +{settings.whatsapp_to}"
-            if not whatsapp_missing
-            else "missing " + ", ".join(whatsapp_missing),
+            f"ready through the {provider}, alerts go to +{settings.whatsapp_to}"
+            if not alerts_missing
+            else f"{provider}: missing " + ", ".join(alerts_missing),
         ),
         ("Webhook", "ready" if not webhook_missing else "missing " + ", ".join(webhook_missing)),
         (
@@ -385,24 +382,16 @@ def _setup_status(settings: Settings) -> list[tuple[str, str]]:
 
 
 def _require_webhook_settings(settings: Settings) -> None:
-    missing = [
-        name
-        for name, value in (
-            ("WHATSAPP_TOKEN", settings.whatsapp_token),
-            ("WHATSAPP_PHONE_NUMBER_ID", settings.whatsapp_phone_number_id),
-            ("WHATSAPP_TO", settings.whatsapp_to),
-            ("WHATSAPP_APP_SECRET", settings.whatsapp_app_secret),
-            ("WHATSAPP_VERIFY_TOKEN", settings.whatsapp_verify_token),
-        )
-        if not value
-    ]
+    missing = settings.missing_for_webhook()
     if missing:
         raise ConfigError("the webhook needs " + ", ".join(missing))
 
 
 def _webhook_banner(settings: Settings) -> str:
     port = settings.webhook_port
+    path, who = ("/twilio", "Twilio") if settings.uses_twilio else ("/webhook", "Meta")
     return (
-        f"Webhook listening on http://{settings.webhook_host}:{port}/webhook\n"
-        f"Make it reachable for Meta with:  cloudflared tunnel --url http://localhost:{port}"
+        f"Webhook listening on http://{settings.webhook_host}:{port}{path}\n"
+        f"Make it reachable for {who} with:  cloudflared tunnel --url http://localhost:{port}\n"
+        f"then use the address it prints, followed by {path}, as the webhook URL."
     )

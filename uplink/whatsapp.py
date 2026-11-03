@@ -7,7 +7,7 @@ import hmac
 import re
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
-from typing import Any, Iterator, Literal, Mapping
+from typing import Any, Iterator, Literal, Mapping, Protocol
 
 from .transport import Transport, TransportError
 
@@ -19,6 +19,7 @@ HINTS = {
     100: "A parameter was rejected. WHATSAPP_PHONE_NUMBER_ID must be the phone number ID from API Setup, not the phone number.",
     190: "The access token expired or is wrong. Temporary tokens last 24 hours: generate a new one in API Setup, or use a system user token.",
     131026: "WhatsApp could not deliver to that number. Check that it has WhatsApp and has accepted the latest terms.",
+    131031: "Meta locked this WhatsApp Business Account, which happens to some brand-new accounts. Request a review in Business Support Home, or switch to Twilio's sandbox with WHATSAPP_PROVIDER=twilio (docs/WHATSAPP_SETUP.md).",
     131030: "Your number is not on the test number's recipient list. Add it under WhatsApp > API Setup > To, then confirm the code WhatsApp sends you.",
     131047: 'More than 24 hours since your number last messaged the business number. Send it any message ("hi") on WhatsApp, or use an approved template (WHATSAPP_ALERT_TEMPLATE).',
     131056: "Too many messages to the same number in a short time. Wait a minute.",
@@ -30,13 +31,17 @@ HINTS = {
 
 
 class WhatsAppError(Exception):
-    def __init__(self, message: str, *, code: int | None = None, status: int | None = None):
+    def __init__(self, message: str, *, code: int | None = None, status: int | None = None, hint: str | None = None):
         super().__init__(message)
         self.code = code
         self.status = status
+        self._hint = hint
 
     @property
     def hint(self) -> str | None:
+        """What to do about it, for the error codes people meet while setting up."""
+        if self._hint:
+            return self._hint
         return HINTS.get(self.code) if self.code is not None else None
 
 
@@ -66,6 +71,18 @@ class DeliveryStatus:
     status: str
     error_code: int | None = None
     error_title: str = ""
+
+
+class Messenger(Protocol):
+    """What Uplink needs from a WhatsApp provider: the Cloud API, or Twilio's sandbox."""
+
+    def send_text(self, to: str, body: str, *, reply_to: str | None = None) -> str: ...
+
+    def send_template(
+        self, to: str, name: str, language: str = "en_US", body_parameters: tuple[str, ...] = ()
+    ) -> str: ...
+
+    def download_media(self, media_id: str, url: str = "") -> Media: ...
 
 
 class WhatsAppClient:

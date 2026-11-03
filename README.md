@@ -115,7 +115,9 @@ python3 -m uplink run                # alerts, plus answers to texts and voice n
 | `report [--json]` | numbers from the live run |
 
 The settings that matter are in [.env.example](.env.example); the WhatsApp setup, including the
-webhook tunnel and troubleshooting, is in [docs/WHATSAPP_SETUP.md](docs/WHATSAPP_SETUP.md).
+webhook tunnel and troubleshooting, is in [docs/WHATSAPP_SETUP.md](docs/WHATSAPP_SETUP.md). Uplink
+talks to WhatsApp through Meta's Cloud API, or through Twilio's WhatsApp sandbox when a new Meta
+business account is locked (`WHATSAPP_PROVIDER=twilio`).
 
 ## Tests
 
