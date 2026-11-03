@@ -1,0 +1,183 @@
+# Uplink
+
+When a community Wi-Fi mesh breaks, Uplink tells the volunteers who keep it running **what broke,
+why, and what to check first**, on WhatsApp, in English, Telugu or Hindi.
+
+Freifunk München runs about 2,100 routers, all looked after by volunteers. In the 24 hours before
+23 October 2026, 79 of them went quiet. The public map turned them red. It did not say that seven
+of them were one event: a rooftop antenna lost power at 16:15 and the six antennas that reached the
+internet through it dropped within fifteen seconds. Uplink does.
+
+```
+$ python3 -m uplink analyze --file tests/fixtures/munich-2026-10-23.json
+
+In the last 24 h, 79 nodes went quiet: 6 outages involving several nodes, and 57 single nodes.
+
+1. 22/10 16:15  [cascade] site-bcg5 is down, and the 6 nodes behind it went offline too, all within 15 s
+     · the other 6 reach the internet only through site-bcg5
+     · their names form one set (site-bca…, site-bcg…)
+     check first: power and cabling at site-bcg5, then its mesh link to site-bkl
+
+2. 22/10 22:03  [site] 6 nodes at one location went offline together, all within 7 s
+     · their names form one set (site-bfa…)
+     · they used 3 different gateways, so the gateways are not the problem
+     check first: power and the internet line at that location
+
+3. 22/10 23:26  [site] 3 nodes at one location went offline together, all within 8 s
+     · their names form one set (site-bfa…)
+     · they last booted within the same minute (22/10 11:12), so they likely share a power supply
+     ...
+```
+
+That is real data from the Munich map (router names replaced, contact details removed). The same
+cascade, as it arrives on a volunteer's phone:
+
+```
+*site-bcg5 ఆఫ్‌లైన్ అయింది, దాని వెనుక ఉన్న 6 నోడ్‌లు కూడా ఆఫ్‌లైన్ అయ్యాయి*
+22/10 16:15 నుండి · Freifunk München · ఆఫ్‌లైన్ నోడ్‌లు: 7
+కారణం కావచ్చు: site-bcg5 వద్ద విద్యుత్ లేదా అప్‌లింక్ సమస్య
+ముందుగా చూడండి: site-bcg5 వద్ద విద్యుత్ సరఫరా, కేబుల్స్
+```
+
+Volunteers can also ask, by text or voice note: "what is down right now?", "is Daniel5 up?".
+
+## How it works
+
+```
+map.ffmuc.net ──▶ watch ──▶ correlate ──▶ incidents ──▶ Muse Spark ──▶ check ──▶ WhatsApp
+  every 60 s      silent      5 kinds of    confirm,       writes in      no invented
+                  nodes       evidence      routine,       your language  numbers
+                  after 3 min               rate limit
+voice note ──▶ webhook ──▶ ffmpeg ──▶ Muse Voice Transcribe ──▶ Muse Spark ──▶ reply
+```
+
+**Watch.** Uplink polls the map's `meshviewer.json` once a minute, politely (conditional requests,
+gzip, a User-Agent with your contact). The map keeps a silent router "online" for about ten
+minutes; Uplink counts a node as down once it has been silent for three, so it usually knows
+several minutes before the map does.
+
+**Correlate.** A lone router going dark is usually someone unplugging it. Several going dark
+together usually share a cause, and the public data says which. Uplink links failed nodes by
+evidence, and every piece of evidence also requires the failures to line up in time:
+
+| Evidence | Meaning | Usually points to |
+|---|---|---|
+| behind | it reached the internet through a node that failed first | that node: power, cabling, its uplink |
+| shared uplink | both reached the internet through a neighbour that stayed up | the links into that neighbour |
+| mesh link | they were wired or radio-linked to each other | one location |
+| co-booted | they last booted within the same minute | a shared power supply |
+| name family | the operator named them as a set (`St.Georg3`, `St.Georg5`) | one operator, one site |
+
+Linked failures become one outage: a **cascade** (one root, everything else behind it), a
+**shared neighbour** failure, a **site** outage (power or internet at one place), a **gateway**
+outage, or a **single** node.
+
+**Decide.** Outages become incidents that grow as late failures arrive, merge when new evidence
+links them, and resolve when the root is back (stragglers get five minutes). An incident alerts
+when it is still there one poll later and involves several nodes, a gateway, enough people, or a
+node you watch. A node that fails at the same time on several days (a café's router on a timer)
+is routine and stays quiet. A quarter of the map vanishing at once is treated as a monitoring
+problem, not 500 outages.
+
+**Write.** Muse Spark (`muse-spark-1.3`) receives a fact sheet the code has already settled and
+writes the message in the reader's language. The draft is checked before it is sent: any number
+that is not in the facts, any link, or an overlong text gets one rewrite request, then the
+hand-written template goes out instead. An alert always arrives, and it is always right.
+
+**Listen.** WhatsApp voice notes (OGG/Opus) are converted with ffmpeg to 16 kHz mono WAV, transcribed
+by Muse Voice Transcribe with a Telugu/English/Hindi bias, and answered from Uplink's live state.
+
+## Quick start
+
+Needs Python 3.10 or newer, nothing else. ffmpeg only for voice notes.
+
+```bash
+cp .env.example .env                 # add your keys; everything else has defaults
+python3 -m uplink analyze --file tests/fixtures/munich-2026-10-23.json   # works offline, no keys
+python3 -m uplink check              # fetch the live map, check your setup
+python3 -m uplink send-test          # see docs/WHATSAPP_SETUP.md first
+python3 -m uplink watch              # alerts
+python3 -m uplink run                # alerts, plus answers to texts and voice notes
+```
+
+`pip install -e .` adds an `uplink` command if you prefer it to `python3 -m uplink`.
+
+| Command | What it does |
+|---|---|
+| `check` | fetch the map once; show the network, its busiest dependency points, and what is configured |
+| `analyze [--file F] [--hours 24] [--json] [--send [--pick N] [--dry-run]]` | explain the outages visible in one snapshot |
+| `watch [--once] [--dry-run]` | watch the map and send alerts |
+| `serve` | answer WhatsApp texts and voice notes |
+| `run [--dry-run]` | `watch` and `serve` in one process |
+| `ask "question"` / `ask --audio note.ogg` | ask from the terminal, optionally with a voice note |
+| `replay data/recordings` | run recorded snapshots through Uplink, without touching your data |
+| `send-test [--template]` | check that messages reach your phone, with fixes for common errors |
+| `report [--json]` | numbers from the live run |
+
+The settings that matter are in [.env.example](.env.example); the WhatsApp setup, including the
+webhook tunnel and troubleshooting, is in [docs/WHATSAPP_SETUP.md](docs/WHATSAPP_SETUP.md).
+
+## Tests
+
+```bash
+python3 -m unittest discover -s tests -t .     # about 10 seconds
+python3 scripts/test_many.py                   # the whole suite 10 times, shuffled, in fresh interpreters
+```
+
+`test_many.py` runs each pass in Python's development mode with warnings turned into errors, so a
+leaked socket or unclosed file fails the run. Each pass has its own seed for test order and random
+meshes; a failure prints the seed to replay it.
+
+The suite covers the real Munich snapshot (the cascade, the site outages, the two nodes going quiet
+before the map noticed), property tests on random meshes with planted failures, the incident
+lifecycle, twelve simulated hours of a busy mesh with restarts, and the whole loop end to end
+against fake map, Meta Model API and WhatsApp servers over real HTTP, including a real OGG/Opus
+voice note through ffmpeg.
+
+## Data and privacy
+
+- Uplink reads only the fields it needs. Router owners' contact details, which the map publishes,
+  are never read, so they cannot reach a log, a prompt or a message.
+- It polls at most once a minute and says who it is in its User-Agent (`CONTACT`).
+- Messages go only to your own number, and messages from any other number are ignored.
+- The event log never contains message text, only lengths and outcomes.
+- `ANONYMIZE=true` replaces router names with short ids (`node d477b2`) for screenshots and demos.
+- The test fixture is real data trimmed to the nodes that matter, with contact details and
+  locations removed and router names replaced while keeping their families
+  ([scripts/make_fixture.py](scripts/make_fixture.py)).
+- Network data: Freifunk München, [map.ffmuc.net](https://map.ffmuc.net). Ask them before you
+  publish their data.
+
+## Limits
+
+- A single snapshot cannot say how many people an outage cut off: the map resets the client count
+  of a node once it goes offline. Live monitoring remembers the counts from the minute before.
+- Evidence is circumstantial. Two unrelated routers with names like `Kiosk1` and `Kiosk2` failing
+  within the same two minutes would be grouped. The time windows make that rare, and the message
+  shows the evidence so a volunteer can judge it.
+- The WhatsApp test number only messages numbers you have registered, and ordinary messages only
+  within 24 hours of your last message to it (or through an approved template).
+
+## Live-run numbers
+
+`python3 -m uplink report` after the watcher has run:
+
+```
+(paste the output here before submitting)
+```
+
+## Layout
+
+| Module | Responsibility |
+|---|---|
+| `mesh.py` | data model, meshviewer.json reader, compact storage format |
+| `feed.py`, `transport.py` | fetching the map; HTTP with timeouts, bounded retries, gzip, size limits |
+| `correlate.py` | evidence and outage grouping |
+| `incidents.py` | incident lifecycle and alert policy |
+| `facts.py`, `templates.py`, `writer.py` | what a message may say, hand-written messages, Muse Spark with checks |
+| `muse.py`, `whatsapp.py`, `voice.py` | Meta Model API, WhatsApp Cloud API, audio conversion |
+| `monitor.py`, `server.py`, `assistant.py` | the watch loop, the webhook, answering questions |
+| `store.py`, `report.py`, `config.py`, `app.py`, `cli.py` | data folder, numbers, settings, wiring, command line |
+
+Built for the Meta Global AI Developer Hackathon with the Meta Model API (Muse Spark, Muse Voice
+Transcribe) and the WhatsApp Cloud API. MIT licensed.
