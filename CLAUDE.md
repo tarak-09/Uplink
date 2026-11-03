@@ -3,7 +3,7 @@
 Uplink watches the Freifunk München community Wi-Fi map, works out which router failures share a
 cause, and sends the volunteers a WhatsApp message (English, Telugu or Hindi) saying what broke, why,
 and what to check first. Muse Spark writes the messages, Muse Voice Transcribe hears voice notes,
-and WhatsApp delivers them (through Twilio's sandbox for now). README.md explains the design.
+and WhatsApp delivers them (for the demo, a Telegram bot does). README.md explains the design.
 
 ## Today
 
@@ -12,8 +12,9 @@ and WhatsApp delivers them (through Twilio's sandbox for now). README.md explain
 - The code is finished and tested. Today is about running it on this laptop against the real
   services, recording a two-minute demo (docs/DEMO.md) and submitting.
 - Prefer fixing setup problems over adding features. Add nothing new unless the user asks.
-- WhatsApp goes through Twilio's sandbox for now: `WHATSAPP_PROVIDER=twilio`. Meta locked the new
-  WhatsApp Business Account (error 131031) until it reviews it. Details under item 3 below.
+- For the demo, messages go through a Telegram bot: `WHATSAPP_PROVIDER=telegram`. Meta locked the new
+  WhatsApp Business Account (error 131031) until it reviews it, and Twilio's trial number only sends
+  templates (error 21654). Details under item 3 below.
 
 ## Ground rules
 
@@ -25,7 +26,8 @@ and WhatsApp delivers them (through Twilio's sandbox for now). README.md explain
 - Secrets live in `.env`, which the user edits by hand. Never print, echo, log or commit its values,
   and never `cat` it. To check a variable exists, test for it without showing it.
 - Never read or output the map's `owner`/contact fields. Never message any number except
-  `WHATSAPP_TO`. Never poll the public map more than once a minute.
+  `WHATSAPP_TO`, or any Telegram chat except `TELEGRAM_CHAT_ID`. Never poll the public map more than
+  once a minute.
 - Long-running processes (`uplink watch`, `uplink run`, `cloudflared`) belong in the user's own
   terminal: give the user the command instead of running it yourself.
 - Commit or push only when the user asks. `.env` and `data/` must never be committed.
@@ -38,9 +40,10 @@ and WhatsApp delivers them (through Twilio's sandbox for now). README.md explain
 | `python3 -m uplink check` | fetch the live map once, show what is configured |
 | `python3 -m uplink analyze --file tests/fixtures/munich-2026-10-23.json` | explain the real 23 Oct snapshot (offline) |
 | `... analyze --file tests/fixtures/munich-2026-10-23.json --send [--dry-run] --pick 1` | write (Muse Spark) and send the alert for the rooftop cascade |
-| `python3 -m uplink send-test [--template]` | check WhatsApp delivery; prints fixes for common error codes |
+| `python3 -m uplink send-test [--template]` | check delivery (WhatsApp or Telegram); prints fixes for common error codes |
+| `python3 -m uplink telegram-chat-id` | list the chats that messaged the Telegram bot, to find `TELEGRAM_CHAT_ID` |
 | `python3 -m uplink watch [--dry-run]` | live alerts (user's terminal) |
-| `python3 -m uplink run` | live alerts plus the WhatsApp webhook (user's terminal) |
+| `python3 -m uplink run` | live alerts plus replies: the WhatsApp webhook, or Telegram polling (user's terminal) |
 | `python3 -m uplink ask "what is down?"` / `ask --audio note.ogg` | test the assistant and transcription from the terminal |
 | `python3 -m uplink report` | numbers from the live run (for the README) |
 
@@ -49,15 +52,15 @@ and WhatsApp delivers them (through Twilio's sandbox for now). README.md explain
 `uplink/`: `mesh.py` (data model, map reader), `feed.py` + `transport.py` (HTTP), `correlate.py`
 (evidence and outage grouping), `incidents.py` (lifecycle, alert policy), `facts.py` + `templates.py`
 + `writer.py` (what messages say, fallback texts, Muse Spark with checks), `muse.py` (Meta Model API),
-`whatsapp.py` (Cloud API), `twilio.py` (Twilio sandbox), `voice.py` (ffmpeg), `monitor.py` (watch loop),
-`server.py` (webhook), `assistant.py` (questions), `store.py` (data folder), `report.py`, `config.py`,
-`app.py` (wiring), `cli.py`.
-`tests/support.py` holds the mesh builder and the fake map, Meta, WhatsApp and Twilio servers.
+`whatsapp.py` (Cloud API), `twilio.py` (Twilio sandbox), `telegram.py` (Telegram bot and its poller),
+`voice.py` (ffmpeg), `monitor.py` (watch loop), `server.py` (webhook and reply queue), `assistant.py`
+(questions), `store.py` (data folder), `report.py`, `config.py`, `app.py` (wiring), `cli.py`.
+`tests/support.py` holds the mesh builder and the fake map, Meta, WhatsApp, Twilio and Telegram servers.
 
 ## Checks against the real services
 
 The code was written without network access to Meta, WhatsApp or the live map. The tests use fakes
-built from Meta's documentation. Check each on first contact, in this order:
+built from each service's documentation. Check each on first contact, in this order:
 
 1. **Live map**: verified on 3 Nov. `python3 -m uplink check` printed 2,087 nodes.
 2. **Muse Spark**: verified against the real API on 3 Nov (`POST {MODEL_BASE_URL}/chat/completions`,
@@ -67,15 +70,22 @@ built from Meta's documentation. Check each on first contact, in this order:
    ends with "Alert written by muse" in English and Telugu. If it says "template (...)", the note in
    parentheses says why. Reasoning counts toward `max_completion_tokens` (about 830-950 tokens per alert
    at `low`), so the cap is 4096 and a reply cut off with `finish_reason: "length"` falls back to the template.
-3. **WhatsApp**: we use `WHATSAPP_PROVIDER=twilio` for now. Meta locked the new WhatsApp Business
-   Account (error 131031, "Business Account locked") until it reviews it, so messages go through
-   Twilio's WhatsApp sandbox. Setup: "Meta locked the account? Use Twilio's sandbox" in docs/WHATSAPP_SETUP.md.
-   - **Twilio sandbox**, not yet tried (`POST {TWILIO_BASE_URL}/2010-04-01/Accounts/{SID}/Messages.json`,
-     Basic auth with `TWILIO_ACCOUNT_SID` and `TWILIO_AUTH_TOKEN`, form fields `From`, `To`, `Body` as
-     `whatsapp:+<digits>`; reply `sid`): once the user has sent the join code to +1 415 523 8886,
-     `send-test` must print "WhatsApp accepted the message" and the text must arrive from that number.
-     The sandbox cannot send templates, so `send-test --template` fails by design. For replies, the
-     sandbox's "When a message comes in" is the tunnel address plus `/twilio` (not `/webhook`).
+3. **Messages**: we use `WHATSAPP_PROVIDER=telegram` for the demo. Meta locked the new WhatsApp Business
+   Account (error 131031, "Business Account locked") until it reviews it, and Twilio's trial number only
+   sends templates. Setup: "No WhatsApp at all? Use a Telegram bot" in docs/WHATSAPP_SETUP.md.
+   - **Telegram bot**, not yet tried (`POST {TELEGRAM_BASE_URL}/bot<token>/sendMessage`, JSON `chat_id`,
+     `text` as HTML with `parse_mode: "HTML"`, `reply_parameters`; reply `{"ok": true, "result":
+     {"message_id": ...}}`; `getUpdates` with `offset`, `timeout: 30`, `allowed_updates: ["message"]`;
+     voice notes by `getFile`, then `GET {TELEGRAM_BASE_URL}/file/bot<token>/<file_path>`). Once the
+     user has pressed Start, `telegram-chat-id` must list their chat, `send-test` must print "Telegram
+     accepted the message" with the text arriving in the bot's chat (bold shown as bold), and
+     `uplink run` (user's terminal) must answer "status" and a voice note there.
+   - **Twilio sandbox**, tried on 3 Nov and refused: this account's trial number (+1 737 258 3478, set as
+     `TWILIO_WHATSAPP_FROM`; not the classic +1 415 523 8886) answers free-form `Body` sends with 21654
+     "ContentSid Required", even right after the join. Request:
+     `POST {TWILIO_BASE_URL}/2010-04-01/Accounts/{SID}/Messages.json`, Basic auth, form fields `From`,
+     `To`, `Body` as `whatsapp:+<digits>`; reply `sid`. For replies, the sandbox's "When a message comes
+     in" is the tunnel address plus `/twilio` (not `/webhook`).
    - **Meta Cloud API** (Graph API `v26.0` unless `WHATSAPP_API_VERSION` says otherwise), back with
      `WHATSAPP_PROVIDER=cloud` once Meta unlocks the account: skip `send-test --template` there too,
      because this account got Meta's newer sample templates and `hello_world` may not exist. Use
@@ -98,6 +108,10 @@ Spark drafts keep failing the number check, tune the prompt in `writer.py`; keep
 - Twilio sandbox: error 63015 means the user's number has not joined, or its three days ran out (send
   the join code to +1 415 523 8886 again); 63016 means no message from the user in 24 hours (send
   "hi"); 20003 means a wrong `TWILIO_ACCOUNT_SID` or `TWILIO_AUTH_TOKEN`.
+- Telegram: only one program may fetch a bot's messages, so a 409 "Conflict" in the log means a second
+  `uplink serve`/`run` (or `telegram-chat-id`) is running. "chat not found" means a wrong
+  `TELEGRAM_CHAT_ID`, or nobody pressed Start. The token is part of every Bot API URL, so Uplink scrubs
+  it from errors and logs; never print those URLs.
 - The webhook answers only `WHATSAPP_TO`. "rejected a webhook call" in the log means a wrong
   `WHATSAPP_APP_SECRET` (Cloud API); "rejected a Twilio call" means Twilio signed a different address:
   set `TWILIO_WEBHOOK_URL` to the exact address typed into the Twilio Console.

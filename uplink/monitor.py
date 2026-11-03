@@ -45,15 +45,24 @@ class Sender(Protocol):
 
 
 class WhatsAppSender:
-    def __init__(self, client: Messenger, to: str, *, template: str = "", template_language: str = "en") -> None:
+    def __init__(
+        self,
+        client: Messenger,
+        to: str,
+        *,
+        template: str = "",
+        template_language: str = "en",
+        service_window: bool = True,  # False for Telegram, which has no 24-hour rule
+    ) -> None:
         self.client = client
         self.to = to
         self.template = template
         self.template_language = template_language
+        self.service_window = service_window
 
     @property
     def needs_open_window(self) -> bool:
-        return not self.template
+        return self.service_window and not self.template
 
     def send(self, text: str) -> str:
         try:

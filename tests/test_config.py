@@ -79,6 +79,8 @@ class ValidationTest(unittest.TestCase):
             "WEBHOOK_PORT": "70000",
             "STALE_AFTER_SECONDS": "30",
             "ALERTS_PER_HOUR": "0",
+            "TELEGRAM_CHAT_ID": "@me",
+            "TELEGRAM_BOT_TOKEN": "nope",
         }
         for variable, value in cases.items():
             with self.subTest(variable=variable), self.assertRaises(ConfigError) as caught:
@@ -118,6 +120,27 @@ class ValidationTest(unittest.TestCase):
             twilio.missing_for_webhook(), ["TWILIO_AUTH_TOKEN"], "Twilio needs no app secret or verify token"
         )
         self.assertEqual(twilio.twilio_whatsapp_from, "14155238886")
+
+    def test_telegram(self):
+        telegram = load_settings(
+            {"WHATSAPP_PROVIDER": "telegram", "TELEGRAM_BOT_TOKEN": "123456:AAE-secret_6", "TELEGRAM_CHAT_ID": "-1001234"},
+            None,
+        )
+        self.assertTrue(telegram.uses_telegram)
+        self.assertFalse(telegram.uses_twilio)
+        self.assertEqual((telegram.telegram_chat_id, telegram.missing_for_alerts()), ("-1001234", []))
+        self.assertNotIn("AAE-secret_6", repr(telegram))
+        bare = load_settings({"WHATSAPP_PROVIDER": "telegram", "WHATSAPP_TO": "4915112345678"}, None)
+        self.assertEqual(bare.missing_for_alerts(), ["TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID"])
+        self.assertEqual(bare.missing_for_webhook(), ["TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID"], "no webhook secrets")
+        self.assertEqual(load_settings({"TELEGRAM_CHAT_ID": "0042"}, None).telegram_chat_id, "42")
+
+    def test_a_malformed_bot_token_is_refused_without_showing_it(self):
+        for token in ("bot123456:AAE-secret", "123456:AAE secret", "AAE-secret"):
+            with self.subTest(token=token), self.assertRaises(ConfigError) as caught:
+                load_settings({"TELEGRAM_BOT_TOKEN": token}, None)
+            self.assertTrue(str(caught.exception).startswith("TELEGRAM_BOT_TOKEN"))
+            self.assertNotIn("secret", str(caught.exception))
 
     def test_secrets_stay_out_of_repr(self):
         settings = load_settings(

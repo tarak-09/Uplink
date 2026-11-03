@@ -1,7 +1,9 @@
+import _thread
 import contextlib
 import io
 import json
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 
@@ -9,7 +11,16 @@ from uplink import __version__
 from uplink.cli import TEST_MESSAGE, main
 from uplink.store import Store
 
-from .support import FIXTURE, FakeFeed, FakeGraph, FakeTwilio, MeshBuilder, twilio_error, whatsapp_error
+from .support import (
+    FIXTURE,
+    FakeFeed,
+    FakeGraph,
+    FakeTelegram,
+    FakeTwilio,
+    MeshBuilder,
+    twilio_error,
+    whatsapp_error,
+)
 
 
 class CliTestCase(unittest.TestCase):
@@ -205,6 +216,107 @@ class TwilioCommandsTest(CliTestCase):
         code, _, err = self.run_cli("serve")
         self.assertEqual(code, 2)
         self.assertIn("the webhook needs TWILIO_AUTH_TOKEN", err)
+
+
+class TelegramCommandsTest(CliTestCase):
+    def setUp(self):
+        super().setUp()
+        self.telegram = FakeTelegram().__enter__()
+        self.write_env(**self.telegram_env())
+
+    def tearDown(self):
+        self.telegram.__exit__()
+        super().tearDown()
+
+    def telegram_env(self, **values: str) -> dict[str, str]:
+        return {
+            "WHATSAPP_PROVIDER": "telegram",
+            "TELEGRAM_BOT_TOKEN": FakeTelegram.token,
+            "TELEGRAM_CHAT_ID": str(FakeTelegram.chat_id),
+            "TELEGRAM_BASE_URL": self.telegram.url,
+            **values,
+        }
+
+    def test_send_test_reaches_the_chat(self):
+        code, out, _ = self.run_cli("send-test")
+        self.assertEqual(code, 0)
+        self.assertIn("Telegram accepted the message (id 1)", out)
+        self.assertEqual(self.telegram.texts(), [TEST_MESSAGE])
+        self.assertEqual(self.telegram.sent()[0]["chat_id"], 4242)
+
+    def test_telegram_has_no_templates(self):
+        code, out, _ = self.run_cli("send-test", "--template")
+        self.assertEqual(code, 1)
+        self.assertIn("Telegram refused the message: Telegram has no message templates", out)
+        self.assertEqual(self.telegram.requests, [])
+
+    def test_send_test_explains_a_wrong_chat(self):
+        self.write_env(**self.telegram_env(TELEGRAM_CHAT_ID="5550001"))
+        code, out, _ = self.run_cli("send-test")
+        self.assertEqual(code, 1)
+        self.assertIn("What to do: TELEGRAM_CHAT_ID is wrong", out)
+
+    def test_check_shows_where_alerts_go_and_never_the_token(self):
+        with FakeFeed() as feed:
+            feed.document = MeshBuilder().gateway("gw").node("a", via="gw").document()
+            self.write_env(**self.telegram_env(FEED_URL=feed.feed_url))
+            code, out, _ = self.run_cli("check")
+        self.assertEqual(code, 0)
+        self.assertIn("Telegram    ready, alerts go to chat 4242", out)
+        self.assertIn("Webhook     not needed", out)
+        self.assertNotIn(FakeTelegram.token.partition(":")[2], out)
+
+    def test_chat_ids_of_recent_messages(self):
+        self.telegram.push("/start")
+        code, out, _ = self.run_cli("telegram-chat-id")
+        self.assertEqual(code, 0)
+        self.assertRegex(out, r"4242 +private +Vishnu")
+        self.assertIn("TELEGRAM_CHAT_ID=4242", out)
+        self.assertNotIn("offset", self.telegram.polls()[0], "nothing is confirmed, so serve still gets the messages")
+
+    def test_chat_ids_before_anyone_pressed_start(self):
+        code, out, _ = self.run_cli("telegram-chat-id")
+        self.assertEqual(code, 1)
+        self.assertIn("press Start", out)
+
+    def test_chat_ids_with_a_wrong_token(self):
+        self.write_env(**self.telegram_env(TELEGRAM_BOT_TOKEN="999999:not-the-real-token"))
+        code, out, _ = self.run_cli("telegram-chat-id")
+        self.assertEqual(code, 1)
+        self.assertIn("What to do: Telegram rejected the bot token", out)
+        self.assertNotIn("not-the-real-token", out)
+
+    def test_serve_needs_the_chat_id(self):
+        self.write_env(**self.telegram_env(TELEGRAM_CHAT_ID=""))
+        code, _, err = self.run_cli("serve")
+        self.assertEqual(code, 2)
+        self.assertIn("answering Telegram messages needs TELEGRAM_CHAT_ID", err)
+
+    def test_serve_answers_in_the_chat_until_ctrl_c(self):
+        Store(self.data).save_snapshot(MeshBuilder().gateway("gw").node("a", via="gw", clients=2).snapshot())
+        self.telegram.push("status")
+
+        returned = threading.Event()
+
+        def press_ctrl_c_once_answered():
+            self.telegram.wait_for(1, timeout=10)
+            if not returned.is_set():  # never interrupt the test runner itself
+                _thread.interrupt_main()
+
+        helper = threading.Thread(target=press_ctrl_c_once_answered)
+        helper.start()
+        try:
+            code, out, _ = self.run_cli("serve")
+        finally:
+            returned.set()
+        helper.join(15)
+        for thread in threading.enumerate():
+            if thread.name == "uplink-telegram":
+                thread.join(5)  # it notices the stop at the end of its current long poll
+        self.assertEqual(code, 130)
+        self.assertIn("Fetching Telegram messages for chat 4242", out)
+        self.assertIn("<b>Freifunk München right now</b>\nNodes online: 2 of 2", self.telegram.texts()[0])
+        self.assertEqual(self.telegram.sent()[0]["reply_parameters"]["message_id"], 1)
 
 
 class OtherCommandsTest(CliTestCase):

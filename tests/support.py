@@ -1,4 +1,4 @@
-"""Test helpers: a mesh builder, programmable HTTP fakes for the three services, a fixed clock."""
+"""Test helpers: a mesh builder, programmable HTTP fakes for each outside service, a fixed clock."""
 
 from __future__ import annotations
 
@@ -6,9 +6,11 @@ import base64
 import gzip
 import hashlib
 import hmac
+import html
 import json
 import re
 import threading
+import time
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from email import message_from_bytes
@@ -417,6 +419,171 @@ def twilio_error(code: int, message: str = "error", status: int = 400) -> Reply:
 def twilio_signature(auth_token: str, url: str, params: dict[str, str]) -> str:
     payload = url + "".join(k + v for k, v in sorted(params.items()))
     return base64.b64encode(hmac.new(auth_token.encode(), payload.encode(), hashlib.sha1).digest()).decode()
+
+
+TELEGRAM_TAGS = frozenset(
+    {"b", "strong", "i", "em", "u", "ins", "s", "strike", "del", "span", "tg-spoiler", "a", "tg-emoji", "code", "pre",
+     "blockquote"}
+)
+_TELEGRAM_MARKUP = re.compile(r"<(/?)([A-Za-z][\w-]*)[^<>]*>|&(?:#\d+|#x[0-9A-Fa-f]+|lt|gt|amp|quot);|[<>&]")
+
+
+def telegram_text(markup: str) -> str:
+    """Read a message the way Telegram's HTML parse mode does, and refuse what Telegram refuses
+    ("can't parse entities"): unknown or unclosed tags, other named entities, a bare <, > or &."""
+    plain: list[str] = []
+    open_tags: list[str] = []
+    position = 0
+    for match in _TELEGRAM_MARKUP.finditer(markup):
+        plain.append(markup[position : match.start()])
+        position = match.end()
+        token = match.group(0)
+        if match.group(2):
+            name = match.group(2).lower()
+            if name not in TELEGRAM_TAGS:
+                raise ValueError(f'Unsupported start tag "{name}" at byte offset {match.start()}')
+            if not match.group(1):
+                open_tags.append(name)
+            elif not open_tags or open_tags.pop() != name:
+                raise ValueError(f"Unmatched end tag at byte offset {match.start()}")
+        elif len(token) == 1:
+            raise ValueError(f"Unexpected {token!r} at byte offset {match.start()}")
+        else:
+            plain.append(html.unescape(token))
+    if open_tags:
+        raise ValueError(f'Can\'t find end tag corresponding to start tag "{open_tags[-1]}"')
+    plain.append(markup[position:])
+    return "".join(plain)
+
+
+def telegram_error(code: int, description: str) -> Reply:
+    return json_reply({"ok": False, "error_code": code, "description": description}, code)
+
+
+class FakeTelegram(FakeServer):
+    """Telegram's Bot API. sendMessage reads the HTML like Telegram and refuses what Telegram refuses;
+    getUpdates serves pushed messages from an offset and forgets confirmed ones, holding an empty
+    long poll for a moment; getFile and the file host serve one voice note. Wrong tokens get 401."""
+
+    token = "123456:test-token"
+    chat_id = 4242
+    voice_file_id = "AwACAgIAAxkBAAIBvoice"
+    max_wait = 0.1  # Telegram holds an empty long poll for `timeout` seconds; tests should not wait that long
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.fail_with: Reply | None = None  # the answer to every sendMessage
+        self.fail_updates: list[Reply] = []  # answers to the next getUpdates calls
+        self.media = b""
+        self.chats = {self.chat_id}  # chats in which someone pressed Start
+        self._pending: list[dict[str, Any]] = []
+        self._next_update = 805_000_001
+        self._next_message = 1
+        self._changed = threading.Condition()
+        bot = f"/bot{re.escape(self.token)}"
+        self.route("POST", f"{bot}/sendMessage", self._send)
+        self.route("POST", f"{bot}/getUpdates", self._updates)
+        self.route("POST", f"{bot}/getFile", self._file)
+        self.route("GET", rf"/file{bot}/(?P<path>.+)", self._download)
+        self.route("POST", r"/bot[^/]+/\w+", lambda request, match: telegram_error(401, "Unauthorized"))
+
+    def push(self, text: str | None = None, *, voice: bool = False, chat_id: int | None = None) -> int:
+        """Someone messages the bot; returns the update's id."""
+        chat_id = self.chat_id if chat_id is None else chat_id
+        if chat_id < 0:
+            chat = {"id": chat_id, "title": "Freifunk volunteers", "type": "group"}
+        else:
+            chat = {"id": chat_id, "first_name": "Vishnu", "type": "private"}
+        with self._changed:
+            message: dict[str, Any] = {
+                "message_id": self._next_message,
+                "from": {"id": abs(chat_id), "is_bot": False, "first_name": "Vishnu", "language_code": "en"},
+                "chat": chat,
+                "date": 1762081200,
+            }
+            if text is not None:
+                message["text"] = text
+            if voice:
+                message["voice"] = {
+                    "duration": 2,
+                    "mime_type": "audio/ogg",
+                    "file_id": self.voice_file_id,
+                    "file_unique_id": "AgADvoice",
+                    "file_size": len(self.media),
+                }
+            update = {"update_id": self._next_update, "message": message}
+            self._next_update += 1
+            self._next_message += 1
+            self._pending.append(update)
+            self._changed.notify_all()
+        return update["update_id"]
+
+    def sent(self) -> list[dict[str, Any]]:
+        return [r.json() for r in self.requests if r.path == f"/bot{self.token}/sendMessage"]
+
+    def texts(self) -> list[str]:
+        return [m["text"] for m in self.sent()]
+
+    def polls(self) -> list[dict[str, Any]]:
+        return [r.json() for r in self.requests if r.path == f"/bot{self.token}/getUpdates"]
+
+    def wait_for(self, count: int, timeout: float = 5.0) -> list[str]:
+        """Wait until `count` messages have been sent; returns the texts."""
+        deadline = time.monotonic() + timeout
+        while len(self.texts()) < count and time.monotonic() < deadline:
+            time.sleep(0.01)
+        return self.texts()
+
+    def _send(self, request: Recorded, _: re.Match) -> Reply:
+        if self.fail_with:
+            return self.fail_with
+        payload = request.json()
+        text = payload.get("text", "")
+        if payload.get("parse_mode") == "HTML":
+            try:
+                text = telegram_text(text)
+            except ValueError as exc:
+                return telegram_error(400, f"Bad Request: can't parse entities: {exc}")
+        if not text.strip():
+            return telegram_error(400, "Bad Request: message text is empty")
+        if len(text) > 4096:
+            return telegram_error(400, "Bad Request: message is too long")
+        try:
+            chat_id = int(payload.get("chat_id"))  # Telegram takes "4242" as well as 4242
+        except (TypeError, ValueError):
+            chat_id = None
+        if chat_id not in self.chats:
+            return telegram_error(400, "Bad Request: chat not found")
+        with self._changed:
+            message_id = self._next_message
+            self._next_message += 1
+        chat = {"id": chat_id, "type": "private"}
+        return json_reply({"ok": True, "result": {"message_id": message_id, "chat": chat, "date": 1762081260, "text": text}})
+
+    def _updates(self, request: Recorded, _: re.Match) -> Reply:
+        if self.fail_updates:
+            return self.fail_updates.pop(0)
+        payload = request.json() if request.body else {}
+        offset = payload.get("offset")
+        with self._changed:
+            if isinstance(offset, int):
+                self._pending = [u for u in self._pending if u["update_id"] >= offset]  # confirmed: forgotten
+            if not self._pending and payload.get("timeout"):
+                self._changed.wait(min(payload["timeout"], self.max_wait))
+            result = list(self._pending[: payload.get("limit", 100)])
+        return json_reply({"ok": True, "result": result})
+
+    def _file(self, request: Recorded, _: re.Match) -> Reply:
+        file_id = request.json().get("file_id")
+        if file_id != self.voice_file_id:
+            return telegram_error(400, "Bad Request: invalid file_id")
+        info = {"file_id": file_id, "file_unique_id": "AgADvoice", "file_size": len(self.media), "file_path": "voice/file_0.oga"}
+        return json_reply({"ok": True, "result": info})
+
+    def _download(self, request: Recorded, match: re.Match) -> Reply:
+        if match["path"] != "voice/file_0.oga":
+            return 404, {}, b"Not Found"
+        return 200, {"Content-Type": "application/octet-stream"}, self.media
 
 
 def whatsapp_error(code: int, message: str = "error", status: int = 400) -> Reply:

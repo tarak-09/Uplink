@@ -11,7 +11,7 @@ from urllib.parse import urlparse
 
 LANGUAGES = {"english": "english", "en": "english", "telugu": "telugu", "te": "telugu", "hindi": "hindi", "hi": "hindi"}
 REASONING_EFFORTS = ("minimal", "low", "medium", "high", "xhigh")
-PROVIDERS = ("cloud", "twilio")
+PROVIDERS = ("cloud", "twilio", "telegram")
 MIN_POLL_SECONDS = 60
 _LOCAL_HOSTS = {"localhost", "127.0.0.1", "::1"}
 
@@ -45,7 +45,7 @@ class Settings:
     reasoning_effort: str = "low"
     asr_model: str = "muse-voice-transcribe-1.0"
 
-    # WhatsApp: the Cloud API ("cloud") or Twilio's sandbox ("twilio")
+    # Messages: WhatsApp's Cloud API ("cloud"), Twilio's WhatsApp sandbox ("twilio"), or a Telegram bot ("telegram")
     whatsapp_provider: str = "cloud"
 
     # WhatsApp Cloud API
@@ -66,6 +66,11 @@ class Settings:
     twilio_webhook_url: str = ""
     twilio_base_url: str = "https://api.twilio.com"
 
+    # Telegram bot (alerts and replies go to one chat)
+    telegram_bot_token: str = field(default="", repr=False)
+    telegram_chat_id: str = ""
+    telegram_base_url: str = "https://api.telegram.org"
+
     # Running
     data_dir: Path = Path("data")
     record_snapshots: bool = True
@@ -82,11 +87,18 @@ class Settings:
         return self.whatsapp_provider == "twilio"
 
     @property
+    def uses_telegram(self) -> bool:
+        return self.whatsapp_provider == "telegram"
+
+    @property
     def has_whatsapp(self) -> bool:
         return not self.missing_for_alerts()
 
     def missing_for_alerts(self) -> list[str]:
-        """The variables still needed before alerts can reach WHATSAPP_TO."""
+        """The variables still needed before alerts can reach WHATSAPP_TO (or TELEGRAM_CHAT_ID)."""
+        if self.uses_telegram:
+            needed = {"TELEGRAM_BOT_TOKEN": self.telegram_bot_token, "TELEGRAM_CHAT_ID": self.telegram_chat_id}
+            return [name for name, value in needed.items() if not value]
         if self.uses_twilio:
             needed = {"TWILIO_ACCOUNT_SID": self.twilio_account_sid, "TWILIO_AUTH_TOKEN": self.twilio_auth_token}
         else:
@@ -96,6 +108,8 @@ class Settings:
 
     def missing_for_webhook(self) -> list[str]:
         """The variables still needed before Uplink can answer messages."""
+        if self.uses_telegram:
+            return self.missing_for_alerts()  # no webhook: Uplink fetches the bot's messages itself
         missing = self.missing_for_alerts()
         if not self.uses_twilio:
             extra = {
@@ -120,7 +134,8 @@ class Settings:
             raise ConfigError("STALE_AFTER_SECONDS must be at least 90; nodes answer about once a minute.")
         if self.whatsapp_provider not in PROVIDERS:
             raise ConfigError(
-                "WHATSAPP_PROVIDER must be cloud (Meta's WhatsApp Cloud API) or twilio (Twilio's sandbox)"
+                "WHATSAPP_PROVIDER must be cloud (Meta's WhatsApp Cloud API), twilio (Twilio's sandbox) "
+                "or telegram (a Telegram bot)"
             )
         if self.reasoning_effort not in REASONING_EFFORTS:
             raise ConfigError(f"MODEL_REASONING_EFFORT must be one of: {', '.join(REASONING_EFFORTS)}")
@@ -218,6 +233,19 @@ def _names(raw: str) -> tuple[str, ...]:
     return tuple(part.strip().lower() for part in raw.split(",") if part.strip())
 
 
+def _bot_token(raw: str) -> str:
+    """A Telegram bot token. A bad one is never echoed: the token is a password."""
+    if not re.fullmatch(r"\d+:[A-Za-z0-9_-]+", raw):
+        raise ValueError("expected the token @BotFather shows, like 123456789:AAE-x... (the value is not shown here)")
+    return raw
+
+
+def _chat_id(raw: str) -> str:
+    if not re.fullmatch(r"-?\d{1,20}", raw):
+        raise ValueError(f"expected a number like 123456789 (group ids start with -), got {raw!r}")
+    return str(int(raw))
+
+
 _VARIABLES: dict[str, tuple[str, Callable[[str], Any]]] = {
     "FEED_URL": ("feed_url", _url),
     "NETWORK_NAME": ("network_name", str),
@@ -251,6 +279,9 @@ _VARIABLES: dict[str, tuple[str, Callable[[str], Any]]] = {
     "TWILIO_WHATSAPP_FROM": ("twilio_whatsapp_from", _phone),
     "TWILIO_WEBHOOK_URL": ("twilio_webhook_url", _url),
     "TWILIO_BASE_URL": ("twilio_base_url", _url),
+    "TELEGRAM_BOT_TOKEN": ("telegram_bot_token", _bot_token),
+    "TELEGRAM_CHAT_ID": ("telegram_chat_id", _chat_id),
+    "TELEGRAM_BASE_URL": ("telegram_base_url", _url),
     "DATA_DIR": ("data_dir", Path),
     "RECORD_SNAPSHOTS": ("record_snapshots", _boolean),
     "WEBHOOK_HOST": ("webhook_host", str),

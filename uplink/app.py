@@ -13,6 +13,7 @@ from .monitor import ConsoleSender, Monitor, Sender, WhatsAppSender
 from .muse import MetaModelAPI
 from .server import WebhookApp
 from .store import Store
+from .telegram import TelegramBot, TelegramPoller
 from .transport import Transport
 from .twilio import TwilioWhatsApp
 from .whatsapp import Messenger, WhatsAppClient
@@ -37,8 +38,14 @@ def make_model(settings: Settings, transport: Transport) -> MetaModelAPI | None:
     )
 
 
+def make_telegram_bot(settings: Settings, transport: Transport) -> TelegramBot:
+    return TelegramBot(token=settings.telegram_bot_token, transport=transport, base_url=settings.telegram_base_url)
+
+
 def make_whatsapp(settings: Settings, transport: Transport) -> Messenger | None:
     """The configured WhatsApp provider, or None while its credentials are missing."""
+    if settings.uses_telegram:
+        return make_telegram_bot(settings, transport) if settings.telegram_bot_token else None
     if settings.uses_twilio:
         if not (settings.twilio_account_sid and settings.twilio_auth_token):
             return None
@@ -65,6 +72,10 @@ def make_writer(settings: Settings, model: MetaModelAPI | None) -> Writer:
 
 
 def make_sender(settings: Settings, whatsapp: Messenger | None, *, dry_run: bool) -> Sender:
+    if settings.uses_telegram:
+        if dry_run or whatsapp is None or not settings.telegram_chat_id:
+            return ConsoleSender()
+        return WhatsAppSender(whatsapp, settings.telegram_chat_id, service_window=False)
     if dry_run or whatsapp is None or not settings.whatsapp_to:
         return ConsoleSender()
     return WhatsAppSender(
@@ -113,3 +124,14 @@ def make_webhook(settings: Settings, *, store: Store | None = None, transport: T
         store=store,
         model=model,
     )
+
+
+def make_telegram_poller(
+    settings: Settings, app: WebhookApp, *, transport: Transport | None = None
+) -> TelegramPoller:
+    """Telegram's stand-in for the webhook: messages from TELEGRAM_CHAT_ID go into `app`'s reply queue.
+
+    It gets its own transport, because it runs in its own thread next to the reply worker.
+    """
+    bot = make_telegram_bot(settings, transport or make_transport(settings))
+    return TelegramPoller(bot, settings.telegram_chat_id, app._enqueue)

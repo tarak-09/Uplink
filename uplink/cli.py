@@ -22,6 +22,8 @@ from .app import (
     make_model,
     make_monitor,
     make_sender,
+    make_telegram_bot,
+    make_telegram_poller,
     make_transport,
     make_webhook,
     make_whatsapp,
@@ -36,8 +38,9 @@ from .mesh import Snapshot, dependency_points
 from .monitor import SendError
 from .muse import ModelAPIError
 from .report import build_report, format_report
-from .server import ASR_KEYWORDS, ASR_LANGUAGES, make_server
+from .server import ASR_KEYWORDS, ASR_LANGUAGES, WebhookApp, make_server
 from .store import Store, StoreError
+from .telegram import recent_chats
 from .voice import AudioError, ffmpeg_available, to_wav
 from .whatsapp import WhatsAppError
 
@@ -105,7 +108,7 @@ def build_parser() -> argparse.ArgumentParser:
     replay.add_argument("folder", type=Path, help="a recordings folder, e.g. data/recordings")
     replay.add_argument("--send", action="store_true", help="really send the alerts")
 
-    command("serve", cmd_serve, "answer WhatsApp messages and voice notes")
+    command("serve", cmd_serve, "answer WhatsApp (or Telegram) messages and voice notes")
 
     run = command("run", cmd_run, "watch and serve in one process")
     run.add_argument("--dry-run", action="store_true", help="print alerts instead of sending them")
@@ -114,9 +117,11 @@ def build_parser() -> argparse.ArgumentParser:
     ask.add_argument("question", nargs="?", default="", help='for example "what is down right now?"')
     ask.add_argument("--audio", type=Path, help="a voice note to transcribe and answer")
 
-    send_test = command("send-test", cmd_send_test, "check that WhatsApp messages reach you")
+    send_test = command("send-test", cmd_send_test, "check that WhatsApp (or Telegram) messages reach you")
     send_test.add_argument("--template", action="store_true", help="send the hello_world template instead of text")
     send_test.add_argument("--text", default=TEST_MESSAGE, help="the text to send")
+
+    command("telegram-chat-id", cmd_telegram_chat_id, "list the chats that messaged your Telegram bot")
 
     report = command("report", cmd_report, "numbers from the live run")
     report.add_argument("--json", action="store_true", help="print JSON")
@@ -206,6 +211,16 @@ def cmd_replay(args: argparse.Namespace, settings: Settings) -> int:
 def cmd_serve(args: argparse.Namespace, settings: Settings) -> int:
     _require_webhook_settings(settings)
     app = make_webhook(settings)
+    if settings.uses_telegram:
+        stop = threading.Event()
+        try:
+            poller = _start_telegram(settings, app, stop)
+            while poller.is_alive():
+                poller.join(0.5)  # short waits, so Ctrl+C stops it at once, on Windows too
+        finally:
+            stop.set()
+            app.close()
+        return 0
     server = make_server(app, settings.webhook_host, settings.webhook_port)
     app.start()
     print(_webhook_banner(settings))
@@ -221,6 +236,15 @@ def cmd_run(args: argparse.Namespace, settings: Settings) -> int:
     _require_webhook_settings(settings)
     monitor = make_monitor(settings, dry_run=args.dry_run)
     app = make_webhook(settings)
+    if settings.uses_telegram:
+        stop = threading.Event()
+        try:
+            _start_telegram(settings, app, stop)
+            monitor.run(threading.Event())
+        finally:
+            stop.set()
+            app.close()
+        return 0
     server = make_server(app, settings.webhook_host, settings.webhook_port)
     app.start()
     listener = threading.Thread(target=server.serve_forever, name="uplink-webhook", daemon=True)
@@ -257,21 +281,25 @@ def cmd_ask(args: argparse.Namespace, settings: Settings) -> int:
 
 def cmd_send_test(args: argparse.Namespace, settings: Settings) -> int:
     whatsapp = make_whatsapp(settings, make_transport(settings))
-    if whatsapp is None or not settings.whatsapp_to:
+    to = settings.telegram_chat_id if settings.uses_telegram else settings.whatsapp_to
+    if whatsapp is None or not to:
         missing = ", ".join(settings.missing_for_alerts())
         raise ConfigError(f"set {missing} (see docs/WHATSAPP_SETUP.md)")
+    service = "Telegram" if settings.uses_telegram else "WhatsApp"
     try:
         if args.template:
-            ref = whatsapp.send_template(settings.whatsapp_to, "hello_world", "en_US")
+            ref = whatsapp.send_template(to, "hello_world", "en_US")
         else:
-            ref = whatsapp.send_text(settings.whatsapp_to, args.text)
+            ref = whatsapp.send_text(to, args.text)
     except WhatsAppError as exc:
-        print(f"WhatsApp refused the message: {exc}")
+        print(f"{service} refused the message: {exc}")
         if exc.hint:
             print(f"What to do: {exc.hint}")
         return 1
-    print(f"WhatsApp accepted the message (id {ref}).")
-    if settings.uses_twilio:
+    print(f"{service} accepted the message (id {ref}).")
+    if settings.uses_telegram:
+        print("It is in the bot's chat now. Alerts arrive the same way, at any time of day.")
+    elif settings.uses_twilio:
         print(
             "If it does not arrive within a minute: from WhatsApp, send your join code to +1 415 523 8886\n"
             "(the sandbox forgets you after three days), or any message if you joined earlier, then try again."
@@ -282,6 +310,31 @@ def cmd_send_test(args: argparse.Namespace, settings: Settings) -> int:
             "app dashboard, WhatsApp > Try it out > Check test webhooks, and read the newest status. The usual\n"
             'reason is that your number has not messaged the test number in 24 hours: send it "hi" and try again.'
         )
+    return 0
+
+
+def cmd_telegram_chat_id(args: argparse.Namespace, settings: Settings) -> int:
+    if not settings.telegram_bot_token:
+        raise ConfigError("set TELEGRAM_BOT_TOKEN first: @BotFather shows it when you create the bot")
+    bot = make_telegram_bot(settings, make_transport(settings))
+    try:
+        chats = recent_chats(bot.get_updates())  # no offset: nothing is confirmed, `serve` still sees them all
+    except WhatsAppError as exc:
+        print(f"Telegram refused: {exc}")
+        if exc.hint:
+            print(f"What to do: {exc.hint}")
+        return 1
+    if not chats:
+        print(
+            "No messages yet. In Telegram, open your bot, press Start (or send it any message), then run this\n"
+            "again. Stop uplink serve or run first: they fetch the bot's messages themselves."
+        )
+        return 1
+    print("Chats that messaged your bot recently:")
+    for chat in chats:
+        print(f"  {chat.id:<16} {chat.kind:<11} {chat.name}")
+    if len(chats) == 1:
+        print(f"\nPut this line in .env:  TELEGRAM_CHAT_ID={chats[0].id}")
     return 0
 
 
@@ -359,6 +412,22 @@ def _setup_status(settings: Settings) -> list[tuple[str, str]]:
     provider = "Twilio sandbox" if settings.uses_twilio else "Cloud API"
     alerts_missing = settings.missing_for_alerts()
     webhook_missing = [name for name in settings.missing_for_webhook() if name not in alerts_missing]
+    if settings.uses_telegram:
+        messages = (
+            "Telegram",
+            f"ready, alerts go to chat {settings.telegram_chat_id}"
+            if not alerts_missing
+            else "missing " + ", ".join(alerts_missing),
+        )
+        replies = ("Webhook", "not needed: uplink serve and run fetch messages from Telegram")
+    else:
+        messages = (
+            "WhatsApp",
+            f"ready through the {provider}, alerts go to +{settings.whatsapp_to}"
+            if not alerts_missing
+            else f"{provider}: missing " + ", ".join(alerts_missing),
+        )
+        replies = ("Webhook", "ready" if not webhook_missing else "missing " + ", ".join(webhook_missing))
     return [
         (
             "Muse Spark",
@@ -366,13 +435,8 @@ def _setup_status(settings: Settings) -> list[tuple[str, str]]:
             if settings.has_model
             else "not set up: add MODEL_API_KEY (alerts use templates until then)",
         ),
-        (
-            "WhatsApp",
-            f"ready through the {provider}, alerts go to +{settings.whatsapp_to}"
-            if not alerts_missing
-            else f"{provider}: missing " + ", ".join(alerts_missing),
-        ),
-        ("Webhook", "ready" if not webhook_missing else "missing " + ", ".join(webhook_missing)),
+        messages,
+        replies,
         (
             "Voice notes",
             "ffmpeg found" if ffmpeg_available(settings.ffmpeg) else f"ffmpeg not found ({settings.ffmpeg})",
@@ -384,7 +448,21 @@ def _setup_status(settings: Settings) -> list[tuple[str, str]]:
 def _require_webhook_settings(settings: Settings) -> None:
     missing = settings.missing_for_webhook()
     if missing:
-        raise ConfigError("the webhook needs " + ", ".join(missing))
+        needs = "answering Telegram messages" if settings.uses_telegram else "the webhook"
+        raise ConfigError(f"{needs} needs " + ", ".join(missing))
+
+
+def _start_telegram(settings: Settings, app: WebhookApp, stop: threading.Event) -> threading.Thread:
+    """Start answering Telegram messages: the reply worker, and a thread that fetches the messages."""
+    poller = make_telegram_poller(settings, app)
+    thread = threading.Thread(target=poller.run, args=(stop,), name="uplink-telegram", daemon=True)
+    app.start()
+    thread.start()
+    print(
+        f"Fetching Telegram messages for chat {settings.telegram_chat_id}; no webhook or tunnel needed.\n"
+        'Send your bot "status", a question, or a voice note.'
+    )
+    return thread
 
 
 def _webhook_banner(settings: Settings) -> str:

@@ -2,7 +2,8 @@
 
 `/webhook` takes Meta's Cloud API calls, `/twilio` takes Twilio's sandbox calls. Both expect a
 fast answer, so requests are checked and queued, and a worker thread does the slow part:
-downloading voice notes, transcribing, asking Muse Spark, replying.
+downloading voice notes, transcribing, asking Muse Spark, replying. Telegram needs no webhook:
+`telegram.TelegramPoller` fetches the bot's messages and puts them in the same queue.
 """
 
 from __future__ import annotations
@@ -65,7 +66,9 @@ class WebhookApp:
         self.store = store
         self.model = model
         self._clock = clock or (lambda: datetime.now(timezone.utc))
-        self._allowed = {normalize_number(settings.whatsapp_to)} if settings.whatsapp_to else set()
+        # Telegram chat ids keep their minus sign (groups); WhatsApp numbers are digits only.
+        allowed = settings.telegram_chat_id if settings.uses_telegram else normalize_number(settings.whatsapp_to)
+        self._allowed = {allowed} if allowed else set()
         self._queue: queue.Queue[InboundMessage | None] = queue.Queue(maxsize=100)
         self._seen: deque[str] = deque(maxlen=1000)
         self._seen_lock = threading.Lock()

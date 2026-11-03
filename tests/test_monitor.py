@@ -16,6 +16,7 @@ from .support import (
     FakeFeed,
     FakeGraph,
     FakeMeta,
+    FakeTelegram,
     FakeTwilio,
     MeshBuilder,
     json_reply,
@@ -40,6 +41,7 @@ class MonitorTestCase(unittest.TestCase):
         self.meta = FakeMeta().__enter__()
         self.graph = FakeGraph().__enter__()
         self.twilio = FakeTwilio().__enter__()
+        self.telegram = FakeTelegram().__enter__()
         self.meta.default_reply = faithful_reply
         self.clock = Clock()
         self.mesh = (
@@ -57,6 +59,7 @@ class MonitorTestCase(unittest.TestCase):
             model_base_url=self.meta.base_url,
             graph_base_url=self.graph.url,
             twilio_base_url=self.twilio.url,
+            telegram_base_url=self.telegram.url,
             record_snapshots=True,
             **self.settings_overrides,
         )
@@ -64,7 +67,7 @@ class MonitorTestCase(unittest.TestCase):
         self.monitor = self.new_monitor()
 
     def tearDown(self):
-        for fake in (self.feed, self.meta, self.graph, self.twilio):
+        for fake in (self.feed, self.meta, self.graph, self.twilio, self.telegram):
             fake.__exit__()
         self.folder.cleanup()
 
@@ -200,6 +203,41 @@ class TwilioModeTest(MonitorTestCase):
         )
         self.assertEqual({m["To"] for m in self.twilio.sent()}, {"whatsapp:+4915112345678"})
         self.assertEqual(self.graph.sent(), [])
+
+
+class TelegramModeTest(MonitorTestCase):
+    settings_overrides: ClassVar[dict[str, str]] = {
+        "whatsapp_provider": "telegram",
+        "telegram_bot_token": FakeTelegram.token,
+        "telegram_chat_id": str(FakeTelegram.chat_id),
+        "whatsapp_alert_template": "ignored_by_telegram",
+    }
+
+    def test_alerts_and_recoveries_reach_the_chat(self):
+        self.poll()
+        self.mesh.drop("a", "b", ago=40)
+        self.poll()
+        with self.assertNoLogs("uplink.monitor", "WARNING"):  # Telegram has no 24-hour window to warn about
+            self.assertEqual(self.poll().sent, 1)
+        self.mesh.restore("a", "b")
+        self.assertEqual(self.poll().sent, 1)
+        self.assertEqual(
+            self.telegram.texts(),
+            ["<b>a.home is down</b>\n2 nodes offline since 12:00.", "<b>Back online: a.home</b>\nIt lasted 3 min."],
+        )
+        self.assertEqual({m["chat_id"] for m in self.telegram.sent()}, {FakeTelegram.chat_id})
+        self.assertEqual([e["ref"] for e in self.events("alert_sent")], ["1", "2"])
+        self.assertEqual((self.graph.sent(), self.twilio.sent()), ([], []))
+
+    def test_a_refused_alert_is_retried_on_the_next_poll(self):
+        self.telegram.chats = set()  # nobody has pressed Start yet
+        self.poll()
+        self.mesh.drop("a", "b", ago=40)
+        self.poll()
+        self.assertEqual(self.poll().sent, 0)
+        self.assertIn("telegram-chat-id", self.events("alert_failed")[0]["error"])
+        self.telegram.chats = {FakeTelegram.chat_id}
+        self.assertEqual(self.poll().sent, 1)
 
 
 class FeedHealthTest(MonitorTestCase):
