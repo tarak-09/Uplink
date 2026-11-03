@@ -73,13 +73,13 @@ built from each service's documentation. Check each on first contact, in this or
 3. **Messages**: we use `WHATSAPP_PROVIDER=telegram` for the demo. Meta locked the new WhatsApp Business
    Account (error 131031, "Business Account locked") until it reviews it, and Twilio's trial number only
    sends templates. Setup: "No WhatsApp at all? Use a Telegram bot" in docs/WHATSAPP_SETUP.md.
-   - **Telegram bot**, not yet tried (`POST {TELEGRAM_BASE_URL}/bot<token>/sendMessage`, JSON `chat_id`,
-     `text` as HTML with `parse_mode: "HTML"`, `reply_parameters`; reply `{"ok": true, "result":
-     {"message_id": ...}}`; `getUpdates` with `offset`, `timeout: 30`, `allowed_updates: ["message"]`;
-     voice notes by `getFile`, then `GET {TELEGRAM_BASE_URL}/file/bot<token>/<file_path>`). Once the
-     user has pressed Start, `telegram-chat-id` must list their chat, `send-test` must print "Telegram
-     accepted the message" with the text arriving in the bot's chat (bold shown as bold), and
-     `uplink run` (user's terminal) must answer "status" and a voice note there.
+   - **Telegram bot** (@Uplink_hackathon_bot), verified on 3 Nov (`POST {TELEGRAM_BASE_URL}/bot<token>/sendMessage`,
+     JSON `chat_id`, `text` as HTML with `parse_mode: "HTML"`, `reply_parameters`; reply `{"ok": true,
+     "result": {"message_id": ...}}`; `getUpdates` with `offset`, `timeout: 30`, `allowed_updates:
+     ["message"]`; voice notes by `getFile`, then `GET {TELEGRAM_BASE_URL}/file/bot<token>/<file_path>`).
+     `telegram-chat-id` found the chat, `send-test` and a Muse Spark alert (HTML, bold) were accepted,
+     and `uplink run` answered `/start` (help text) and "what is down right now?" (Muse Spark) in the
+     chat. Not yet seen live: a voice note through Telegram, and an alert from `uplink run` itself.
    - **Twilio sandbox**, tried on 3 Nov and refused: this account's trial number (+1 737 258 3478, set as
      `TWILIO_WHATSAPP_FROM`; not the classic +1 415 523 8886) answers free-form `Body` sends with 21654
      "ContentSid Required", even right after the join. Request:
@@ -90,9 +90,12 @@ built from each service's documentation. Check each on first contact, in this or
      `WHATSAPP_PROVIDER=cloud` once Meta unlocks the account: skip `send-test --template` there too,
      because this account got Meta's newer sample templates and `hello_world` may not exist. Use
      `send-test` after the user has replied "hi" to the test number.
-4. **Muse Voice Transcribe** (`POST {MODEL_BASE_URL}/asr/transcribe`, multipart: a `request` JSON part
-   with `model`, `audioEncoding: "WAV"`, `mode: "PUSH_TO_TALK"`, `languageBias`, `keywords`, plus an
-   `audio` WAV part): `python3 -m uplink ask --audio <a voice note file>`.
+4. **Muse Voice Transcribe**: verified against the real API on 3 Nov (`POST {MODEL_BASE_URL}/asr/transcribe`,
+   multipart: a `request` JSON part with `model`, `audioEncoding: "WAV"`, `mode: "PUSH_TO_TALK"`,
+   `languageBias`, `keywords`, plus an `audio` WAV part). A spoken "What is down right now?" as an
+   OGG/Opus voice note came back word for word through `python3 -m uplink ask --audio <file>`, answered
+   by Muse Spark in about 8 s. ffmpeg 9.0.2 is installed with Chocolatey (that needs an Administrator
+   window; VS Code's terminal is not one).
 
 If a real response differs from what the code expects, first update the matching fake in
 `tests/support.py` to behave like the real service, then fix the code, then run the tests. If Muse
@@ -111,7 +114,8 @@ Spark drafts keep failing the number check, tune the prompt in `writer.py`; keep
 - Telegram: only one program may fetch a bot's messages, so a 409 "Conflict" in the log means a second
   `uplink serve`/`run` (or `telegram-chat-id`) is running. "chat not found" means a wrong
   `TELEGRAM_CHAT_ID`, or nobody pressed Start. The token is part of every Bot API URL, so Uplink scrubs
-  it from errors and logs; never print those URLs.
+  it from errors and logs; never print those URLs. Messages sent to the new bot before anything had
+  used its token were never delivered; if `telegram-chat-id` finds nothing, send a new message and rerun.
 - The webhook answers only `WHATSAPP_TO`. "rejected a webhook call" in the log means a wrong
   `WHATSAPP_APP_SECRET` (Cloud API); "rejected a Twilio call" means Twilio signed a different address:
   set `TWILIO_WEBHOOK_URL` to the exact address typed into the Twilio Console.
