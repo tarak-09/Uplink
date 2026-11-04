@@ -1,12 +1,17 @@
 # Uplink
 
-When a community Wi-Fi mesh breaks, Uplink tells the volunteers who keep it running **what broke,
-why, and what to check first**, on WhatsApp, in English, Telugu or Hindi.
+**When a community Wi-Fi network breaks, Uplink tells the volunteers what broke, why, and what to check first, on their phone, in English, Telugu or Hindi.**
 
-Freifunk München runs about 2,100 routers, all looked after by volunteers. In the 24 hours before
-23 October 2026, 79 of them went quiet. The public map turned them red. It did not say that seven
-of them were one event: a rooftop antenna lost power at 16:15 and the six antennas that reached the
-internet through it dropped within fifteen seconds. Uplink does.
+Freifunk München runs about 2,090 routers, with over 3,000 people online on a weekday night, all looked after by volunteers. Its public map turns failed routers red, but never says why. In the 24 hours before 23 October 2026, 79 routers went quiet. Reading the same public data, Uplink found 6 real outages among them. The biggest was one rooftop antenna that took the six antennas behind it offline within 15 seconds.
+
+- **6 alerts instead of 79** (92% less noise). Lone routers that someone switched off don't trigger alerts.
+- **About 7 minutes earlier than the map**, which waits about 10 minutes before marking a router offline.
+- **Every alert says what to check first**, written by **Muse Spark** in the volunteer's language.
+- **Volunteers can ask by voice** in Telugu, Hindi or English, transcribed by **Muse Voice Transcribe**.
+
+Try it in 30 seconds, with no keys and nothing to install (Python 3.10+):
+
+    python -m uplink analyze --file tests/fixtures/munich-2026-10-23.json
 
 ```
 $ python3 -m uplink analyze --file tests/fixtures/munich-2026-10-23.json
@@ -40,6 +45,12 @@ cascade, as it arrives on a volunteer's phone:
 ```
 
 Volunteers can also ask, by text or voice note: "what is down right now?", "is Daniel5 up?".
+
+## Why it matters beyond Munich
+
+Most last-mile Wi-Fi has no operations team. India alone has over 4 lakh PM-WANI public Wi-Fi hotspots, run by local entrepreneurs through 207 aggregators. In April 2026 India's telecom regulator (TRAI) proposed outside help with network management to reduce the burden on these small operators. Uplink is built for that reader: someone who needs to hear "the router behind the tea stall lost power", in their own language, on the phone they already use. Today it works with any Freifunk map that publishes meshviewer.json. PM-WANI aggregators are the next step.
+
+**Delivery.** Uplink supports the WhatsApp Cloud API (built and tested) and Telegram. Meta's review of new business accounts locked our WhatsApp account during the hackathon, so the live demo runs on Telegram. Switching back is one setting (`WHATSAPP_PROVIDER`).
 
 ## How it works
 
