@@ -1,7 +1,7 @@
 # Uplink
 [![tests](https://github.com/tarak-09/Uplink/actions/workflows/ci.yml/badge.svg)](https://github.com/tarak-09/Uplink/actions/workflows/ci.yml)
 
-Demo video (2:35): <paste YouTube link>
+Demo video (2:35): https://youtu.be/ZDuev4sqAdQ
 
 **When a community Wi-Fi network breaks, Uplink tells the volunteers what broke, why, and what to check first, on their phone, in English, Telugu or Hindi.**
 
