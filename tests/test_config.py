@@ -123,7 +123,11 @@ class ValidationTest(unittest.TestCase):
 
     def test_telegram(self):
         telegram = load_settings(
-            {"WHATSAPP_PROVIDER": "telegram", "TELEGRAM_BOT_TOKEN": "123456:AAE-secret_6", "TELEGRAM_CHAT_ID": "-1001234"},
+            {
+                "WHATSAPP_PROVIDER": "telegram",
+                "TELEGRAM_BOT_TOKEN": "123456:AAE-secret_6",
+                "TELEGRAM_CHAT_ID": "-1001234",
+            },
             None,
         )
         self.assertTrue(telegram.uses_telegram)

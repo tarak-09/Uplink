@@ -75,7 +75,10 @@ class ChatTest(unittest.TestCase):
                                     "finish_reason": "length",
                                 }
                             ],
-                            "usage": {"completion_tokens": 1024, "completion_tokens_details": {"reasoning_tokens": 952}},
+                            "usage": {
+                                "completion_tokens": 1024,
+                                "completion_tokens_details": {"reasoning_tokens": 952},
+                            },
                         }
                     )
                 ]

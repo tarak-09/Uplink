@@ -68,7 +68,9 @@ class AnalyzeTest(CliTestCase):
         one = Path(self.folder.name, "one.json")
         mesh = MeshBuilder().gateway("gw").node("a", via="gw").node("b", via="a").tick().drop("a", "b", ago=30)
         one.write_text(json.dumps(mesh.document()), encoding="utf-8")
-        self.assertIn("Uplink would send 1 alert instead of 2 (50% fewer).", self.run_cli("analyze", "--file", str(one))[1])
+        self.assertIn(
+            "Uplink would send 1 alert instead of 2 (50% fewer).", self.run_cli("analyze", "--file", str(one))[1]
+        )
         none = Path(self.folder.name, "none.json")
         none.write_text(json.dumps(MeshBuilder().gateway("gw").node("a", via="gw").tick().document()), encoding="utf-8")
         code, out, _ = self.run_cli("analyze", "--file", str(none))

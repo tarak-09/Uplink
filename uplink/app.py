@@ -126,9 +126,7 @@ def make_webhook(settings: Settings, *, store: Store | None = None, transport: T
     )
 
 
-def make_telegram_poller(
-    settings: Settings, app: WebhookApp, *, transport: Transport | None = None
-) -> TelegramPoller:
+def make_telegram_poller(settings: Settings, app: WebhookApp, *, transport: Transport | None = None) -> TelegramPoller:
     """Telegram's stand-in for the webhook: messages from TELEGRAM_CHAT_ID go into `app`'s reply queue.
 
     It gets its own transport, because it runs in its own thread next to the reply worker.

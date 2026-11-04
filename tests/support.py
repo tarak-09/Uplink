@@ -422,8 +422,24 @@ def twilio_signature(auth_token: str, url: str, params: dict[str, str]) -> str:
 
 
 TELEGRAM_TAGS = frozenset(
-    {"b", "strong", "i", "em", "u", "ins", "s", "strike", "del", "span", "tg-spoiler", "a", "tg-emoji", "code", "pre",
-     "blockquote"}
+    {
+        "b",
+        "strong",
+        "i",
+        "em",
+        "u",
+        "ins",
+        "s",
+        "strike",
+        "del",
+        "span",
+        "tg-spoiler",
+        "a",
+        "tg-emoji",
+        "code",
+        "pre",
+        "blockquote",
+    }
 )
 _TELEGRAM_MARKUP = re.compile(r"<(/?)([A-Za-z][\w-]*)[^<>]*>|&(?:#\d+|#x[0-9A-Fa-f]+|lt|gt|amp|quot);|[<>&]")
 
@@ -558,7 +574,9 @@ class FakeTelegram(FakeServer):
             message_id = self._next_message
             self._next_message += 1
         chat = {"id": chat_id, "type": "private"}
-        return json_reply({"ok": True, "result": {"message_id": message_id, "chat": chat, "date": 1762081260, "text": text}})
+        return json_reply(
+            {"ok": True, "result": {"message_id": message_id, "chat": chat, "date": 1762081260, "text": text}}
+        )
 
     def _updates(self, request: Recorded, _: re.Match) -> Reply:
         if self.fail_updates:
@@ -577,7 +595,12 @@ class FakeTelegram(FakeServer):
         file_id = request.json().get("file_id")
         if file_id != self.voice_file_id:
             return telegram_error(400, "Bad Request: invalid file_id")
-        info = {"file_id": file_id, "file_unique_id": "AgADvoice", "file_size": len(self.media), "file_path": "voice/file_0.oga"}
+        info = {
+            "file_id": file_id,
+            "file_unique_id": "AgADvoice",
+            "file_size": len(self.media),
+            "file_path": "voice/file_0.oga",
+        }
         return json_reply({"ok": True, "result": info})
 
     def _download(self, request: Recorded, match: re.Match) -> Reply:

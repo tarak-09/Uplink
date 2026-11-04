@@ -103,7 +103,9 @@ class HelpersTest(unittest.TestCase):
 
     def test_clock_names_the_time_zone_when_given_a_label(self):
         reference = datetime(2026, 11, 2, 9, 0, tzinfo=MUNICH)
-        self.assertEqual(clock(datetime(2026, 11, 2, 7, 5, tzinfo=MUNICH), reference, "Munich time"), "07:05 Munich time")
+        self.assertEqual(
+            clock(datetime(2026, 11, 2, 7, 5, tzinfo=MUNICH), reference, "Munich time"), "07:05 Munich time"
+        )
         self.assertEqual(
             clock(datetime(2026, 11, 1, 23, 30, tzinfo=MUNICH), reference, "Munich time"), "01/11 23:30 Munich time"
         )

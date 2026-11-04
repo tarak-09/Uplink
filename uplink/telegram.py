@@ -37,13 +37,29 @@ _BOLD = re.compile(r"(?<![\w*])\*(?=[^\s*])([^*\n]*?[^\s*])\*(?![\w*])")
 
 # (error code, words in Telegram's description, what to do). The first match wins.
 _HINTS: tuple[tuple[int, str, str], ...] = (
-    (401, "", "Telegram rejected the bot token. Copy TELEGRAM_BOT_TOKEN again from @BotFather (/mybots, your bot, API Token)."),
+    (
+        401,
+        "",
+        "Telegram rejected the bot token. Copy TELEGRAM_BOT_TOKEN again from @BotFather (/mybots, your bot, API Token).",
+    ),
     (404, "", "Telegram does not recognise the bot token. Copy TELEGRAM_BOT_TOKEN again from @BotFather, all of it."),
-    (400, "chat not found", "TELEGRAM_CHAT_ID is wrong, or nobody in that chat has pressed Start with the bot. Run: uplink telegram-chat-id"),
+    (
+        400,
+        "chat not found",
+        "TELEGRAM_CHAT_ID is wrong, or nobody in that chat has pressed Start with the bot. Run: uplink telegram-chat-id",
+    ),
     (403, "blocked", "The bot is blocked in that chat. Open the chat with the bot in Telegram and press Restart."),
     (403, "", "The bot may not message that chat. Open the chat with the bot in Telegram and press Start."),
-    (409, "webhook", "A webhook is set on this bot, so Uplink cannot fetch its messages. Remove it with the Bot API's deleteWebhook method."),
-    (409, "", "Another program is fetching this bot's messages, such as a second uplink serve or run. Stop it: only one can at a time."),
+    (
+        409,
+        "webhook",
+        "A webhook is set on this bot, so Uplink cannot fetch its messages. Remove it with the Bot API's deleteWebhook method.",
+    ),
+    (
+        409,
+        "",
+        "Another program is fetching this bot's messages, such as a second uplink serve or run. Stop it: only one can at a time.",
+    ),
     (429, "", "Telegram is rate-limiting the bot. Wait a minute."),
 )
 
@@ -231,7 +247,9 @@ class TelegramPoller:
                 failures += 1
                 hint = exc.hint if isinstance(exc, WhatsAppError) else None
                 detail = str(exc) if isinstance(exc, WhatsAppError) else f"{type(exc).__name__}: {exc}"
-                log.error("could not fetch Telegram messages: %s%s", self.bot.scrub(detail), f" | {hint}" if hint else "")
+                log.error(
+                    "could not fetch Telegram messages: %s%s", self.bot.scrub(detail), f" | {hint}" if hint else ""
+                )
                 stop.wait(min(MAX_BACKOFF, self.backoff * 2 ** min(failures - 1, 10)))
                 continue
             failures = 0

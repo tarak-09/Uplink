@@ -13,6 +13,13 @@ Try it in 30 seconds, with no keys and nothing to install (Python 3.10+):
 
     python -m uplink analyze --file tests/fixtures/munich-2026-10-23.json
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/outage-page-dark.png">
+  <img alt="Uplink's outage page: 79 routers went quiet, 6 outages explained, and the rooftop cascade drawn" src="docs/outage-page.png">
+</picture>
+
+`analyze --html outages.html` draws this page for any saved snapshot, or for the live map without `--file`.
+
 ```
 $ python3 -m uplink analyze --file tests/fixtures/munich-2026-10-23.json
 

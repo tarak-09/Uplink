@@ -33,7 +33,8 @@ def until(condition, timeout: float = 5.0) -> None:
 class FormattingTest(unittest.TestCase):
     def test_whatsapp_bold_becomes_html_bold(self):
         self.assertEqual(
-            to_html("*a.home is down*\n2 nodes offline since 12:00."), "<b>a.home is down</b>\n2 nodes offline since 12:00."
+            to_html("*a.home is down*\n2 nodes offline since 12:00."),
+            "<b>a.home is down</b>\n2 nodes offline since 12:00.",
         )
         self.assertEqual(to_html("*7 nodes* offline (*site_bcg5*)"), "<b>7 nodes</b> offline (<b>site_bcg5</b>)")
         telugu = "*site-bcg5 ఆఫ్‌లైన్ అయింది*\nముందుగా చూడండి"
@@ -297,7 +298,8 @@ class AnsweringTest(unittest.TestCase):
         self.poller.poll_once()
         self.app.close()
         self.assertEqual(
-            self.telegram.texts(), ["<b>Freifunk München right now</b>\nNodes online: 2 of 2\nPeople connected: 3\nNo ongoing outages."]
+            self.telegram.texts(),
+            ["<b>Freifunk München right now</b>\nNodes online: 2 of 2\nPeople connected: 3\nNo ongoing outages."],
         )
 
     def test_a_follow_up_builds_on_the_last_answer(self):
