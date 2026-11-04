@@ -11,7 +11,7 @@ from uplink.app import make_telegram_poller, make_webhook
 from uplink.store import Store
 from uplink.telegram import TelegramBot, TelegramPoller, parse_update, recent_chats, to_html
 from uplink.transport import Transport
-from uplink.whatsapp import WhatsAppError
+from uplink.whatsapp import MessengerError
 
 from .audio import voice_note
 from .support import FakeMeta, FakeTelegram, MeshBuilder, make_settings, telegram_error, telegram_text
@@ -79,7 +79,7 @@ class SendTest(unittest.TestCase):
         self.assertEqual(plain[1][-2:], "&…")
 
     def test_refusals_explain_what_to_do(self):
-        with FakeTelegram() as telegram, self.assertRaises(WhatsAppError) as caught:
+        with FakeTelegram() as telegram, self.assertRaises(MessengerError) as caught:
             bot(telegram).send_text("5550001", "hi")
         error = caught.exception
         self.assertEqual((error.code, error.status), (400, 400))
@@ -89,10 +89,10 @@ class SendTest(unittest.TestCase):
     def test_the_token_never_appears_in_an_error(self):
         wrong = "999999:not-the-real-token"
         with FakeTelegram() as telegram:
-            with self.assertRaises(WhatsAppError) as refused:
+            with self.assertRaises(MessengerError) as refused:
                 bot(telegram, token=wrong).send_text(CHAT, "hi")
             telegram.fail_with = (502, {"Content-Type": "text/html"}, b"<html>Bad Gateway</html>")
-            with self.assertRaises(WhatsAppError) as proxied:
+            with self.assertRaises(MessengerError) as proxied:
                 bot(telegram).send_text(CHAT, "hi")
         with socket.create_server(("127.0.0.1", 0)) as listener:  # takes the connection, then hangs up
 
@@ -106,7 +106,7 @@ class SendTest(unittest.TestCase):
             offline = TelegramBot(
                 token=FakeTelegram.token, transport=Transport(retries=0, timeout=2), base_url=f"http://127.0.0.1:{port}"
             )
-            with self.assertRaises(WhatsAppError) as unreachable:
+            with self.assertRaises(MessengerError) as unreachable:
                 offline.send_text(CHAT, "hi")
             hanger.join(5)
         self.assertIn("TELEGRAM_BOT_TOKEN", refused.exception.hint)
@@ -122,7 +122,7 @@ class SendTest(unittest.TestCase):
 
     def test_telegram_has_no_templates(self):
         with FakeTelegram() as telegram:
-            with self.assertRaises(WhatsAppError) as caught:
+            with self.assertRaises(MessengerError) as caught:
                 bot(telegram).send_template(CHAT, "hello_world")
             self.assertEqual(telegram.requests, [])
         self.assertIn("no message templates", str(caught.exception))
@@ -144,7 +144,7 @@ class MediaTest(unittest.TestCase):
         )
 
     def test_an_unknown_file_is_an_error(self):
-        with FakeTelegram() as telegram, self.assertRaises(WhatsAppError) as caught:
+        with FakeTelegram() as telegram, self.assertRaises(MessengerError) as caught:
             bot(telegram).download_media("gone")
         self.assertIn("invalid file_id", str(caught.exception))
 
@@ -258,7 +258,7 @@ class AnsweringTest(unittest.TestCase):
         self.store.save_snapshot(MeshBuilder().gateway("gw").node("a", via="gw", clients=3).snapshot())
         self.settings = make_settings(
             Path(self.folder.name),
-            whatsapp_provider="telegram",
+            messenger="telegram",
             telegram_bot_token=FakeTelegram.token,
             telegram_chat_id=CHAT,
             telegram_base_url=self.telegram.url,

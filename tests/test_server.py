@@ -6,7 +6,6 @@ import tempfile
 import threading
 import unittest
 import urllib.error
-import urllib.parse
 import urllib.request
 from pathlib import Path
 from typing import ClassVar
@@ -16,7 +15,7 @@ from uplink.server import make_server
 from uplink.store import Store
 
 from .audio import voice_note
-from .support import FakeGraph, FakeMeta, FakeTwilio, MeshBuilder, make_settings, twilio_signature, whatsapp_error
+from .support import FakeGraph, FakeMeta, MeshBuilder, make_settings, whatsapp_error
 from .test_whatsapp import webhook
 
 SENDER = "4915112345678"
@@ -33,7 +32,6 @@ class WebhookTestCase(unittest.TestCase):
     def setUp(self):
         self.folder = tempfile.TemporaryDirectory()
         self.graph = FakeGraph().__enter__()
-        self.twilio = FakeTwilio().__enter__()
         self.meta = FakeMeta().__enter__()
         self.meta.default_reply = "No outages right now."
         self.store = Store(Path(self.folder.name))
@@ -41,7 +39,6 @@ class WebhookTestCase(unittest.TestCase):
         self.store.save_snapshot(mesh.snapshot())
         overrides = {
             "graph_base_url": self.graph.url,
-            "twilio_base_url": self.twilio.url,
             "model_base_url": self.meta.base_url,
         }
         if self.model:
@@ -61,7 +58,6 @@ class WebhookTestCase(unittest.TestCase):
         self.server.server_close()
         self.thread.join(5)
         self.graph.__exit__()
-        self.twilio.__exit__()
         self.meta.__exit__()
         self.folder.cleanup()
 
@@ -85,24 +81,6 @@ class WebhookTestCase(unittest.TestCase):
         except urllib.error.HTTPError as err:
             with err:
                 return err.code
-
-    def post_twilio(
-        self, form: dict[str, str], *, token: str = FakeTwilio.auth_token, signed_url: str = "", headers=None
-    ):
-        """POST like Twilio does: form-encoded, signed over the public URL."""
-        port = self.server.server_address[1]
-        url = signed_url or f"https://127.0.0.1:{port}/twilio"
-        all_headers = {"Content-Type": "application/x-www-form-urlencoded", **(headers or {})}
-        if token:
-            all_headers["X-Twilio-Signature"] = twilio_signature(token, url, form)
-        body = urllib.parse.urlencode(form).encode()
-        request = urllib.request.Request(self.base + "/twilio", data=body, headers=all_headers, method="POST")
-        try:
-            with urllib.request.urlopen(request, timeout=5) as response:
-                return response.status, response.headers.get("Content-Type"), response.read().decode()
-        except urllib.error.HTTPError as err:
-            with err:
-                return err.code, err.headers.get("Content-Type"), err.read().decode()
 
     def finish(self) -> None:
         """Wait until every queued message has been answered."""
@@ -250,82 +228,6 @@ class NoModelVoiceTest(WebhookTestCase):
         )
         self.finish()
         self.assertIn("need ffmpeg and a Model API key", self.graph.texts()[0])
-
-
-TWILIO = {
-    "whatsapp_provider": "twilio",
-    "twilio_account_sid": FakeTwilio.account_sid,
-    "twilio_auth_token": FakeTwilio.auth_token,
-}
-
-
-def twilio_text(body: str, sid: str = "SMin1", sender: str = SENDER) -> dict[str, str]:
-    return {
-        "MessageSid": sid,
-        "From": f"whatsapp:+{sender}",
-        "To": "whatsapp:+14155238886",
-        "Body": body,
-        "NumMedia": "0",
-    }
-
-
-class TwilioWebhookTest(WebhookTestCase):
-    extra_settings = TWILIO
-
-    def test_a_question_is_answered_through_twilio(self):
-        status, content_type, body = self.post_twilio(twilio_text("what is down right now?"))
-        self.assertEqual(status, 200)
-        self.assertTrue(content_type.startswith("text/xml"))
-        self.assertIn("<Response>", body)
-        self.finish()
-        self.assertEqual(
-            self.twilio.sent(),
-            [{"From": "whatsapp:+14155238886", "To": f"whatsapp:+{SENDER}", "Body": "No outages right now."}],
-        )
-        self.assertEqual(self.graph.sent(), [])
-
-    def test_forged_calls_are_rejected(self):
-        self.assertEqual(self.post_twilio(twilio_text("status"), token="guess")[0], 403)
-        self.assertEqual(self.post_twilio(twilio_text("status"), token="")[0], 403)
-        self.finish()
-        self.assertEqual(self.twilio.sent(), [])
-
-    def test_the_address_seen_through_a_tunnel_is_what_twilio_signed(self):
-        headers = {"X-Forwarded-Proto": "https", "X-Forwarded-Host": "quiet-river.trycloudflare.com"}
-        status = self.post_twilio(
-            twilio_text("status"), signed_url="https://quiet-river.trycloudflare.com/twilio", headers=headers
-        )[0]
-        self.assertEqual(status, 200)
-
-    def test_strangers_are_ignored(self):
-        self.post_twilio(twilio_text("status", sender="15550001111"))
-        self.finish()
-        self.assertEqual(self.twilio.sent(), [])
-
-    def test_a_voice_note_through_twilio(self):
-        note = voice_note()
-        if note is None:
-            self.skipTest("ffmpeg with Opus support is not installed")
-        self.twilio.media = note
-        form = {
-            **twilio_text(""),
-            "NumMedia": "1",
-            "MediaUrl0": f"{self.twilio.url}/media/MMvoice",
-            "MediaContentType0": "audio/ogg",
-        }
-        self.assertEqual(self.post_twilio(form)[0], 200)
-        self.finish()
-        self.assertEqual(self.twilio.bodies(), ['🎙️ I heard: "what is down right now?"\n\nNo outages right now.'])
-
-
-class TwilioPublicUrlTest(WebhookTestCase):
-    extra_settings: ClassVar[dict[str, str]] = {**TWILIO, "twilio_webhook_url": "https://uplink.example.org/twilio"}
-
-    def test_a_configured_public_url_is_used_for_the_signature(self):
-        self.assertEqual(
-            self.post_twilio(twilio_text("status"), signed_url="https://uplink.example.org/twilio")[0], 200
-        )
-        self.assertEqual(self.post_twilio(twilio_text("status", sid="SMin2"))[0], 403)
 
 
 if __name__ == "__main__":

@@ -123,6 +123,22 @@ class SnapshotTest(unittest.TestCase):
         self.assertEqual(again.nodes, snapshot.nodes)
         self.assertEqual(again.links, snapshot.links)
 
+    def test_compact_round_trip_keeps_the_maps_zero_time(self):
+        # The live map writes Go's zero time for a boot time it does not know. On Windows its epoch
+        # seconds could not be turned back into a date, so `uplink run` crashed loading the snapshot.
+        document = small_mesh().document()
+        document["nodes"][-1]["uptime"] = "0001-01-01T00:00:00Z"
+        snapshot = parse_meshviewer(document)
+        again = from_compact(json.loads(json.dumps(to_compact(snapshot))))
+        zero = datetime(1, 1, 1, tzinfo=timezone.utc)
+        self.assertIn(zero, [node.booted_at for node in snapshot.nodes.values()])
+        self.assertEqual(again.nodes, snapshot.nodes)
+
+    def test_compact_times_beyond_the_calendar_count_as_unknown(self):
+        row = ["a", "a.home", 1, 10**12, 0, 0, "gw", "gw", -(10**12), "v1", "m"]
+        snapshot = from_compact({"v": 1, "t": "2026-11-02T12:00:00+01:00", "n": [row]})
+        self.assertEqual((snapshot.nodes["a"].last_seen, snapshot.nodes["a"].booted_at), (None, None))
+
     def test_compact_rejects_unknown_versions_and_damage(self):
         with self.assertRaises(FeedFormatError):
             from_compact({"v": 99})

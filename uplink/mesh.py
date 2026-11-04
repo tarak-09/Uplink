@@ -282,9 +282,20 @@ def from_compact(document: Mapping[str, Any]) -> Snapshot:
     return Snapshot(taken_at=taken_at, nodes=nodes, links=links)
 
 
+_EPOCH = datetime(1970, 1, 1, tzinfo=timezone.utc)
+
+
 def _epoch(moment: datetime | None) -> int | None:
     return None if moment is None else int(moment.timestamp())
 
 
 def _from_epoch(seconds: int | None, tz: Any) -> datetime | None:
-    return None if seconds is None else datetime.fromtimestamp(seconds, tz)
+    # Plain arithmetic, not datetime.fromtimestamp, which on Windows rejects times before 1970. The map
+    # writes Go's zero time (0001-01-01) for a boot time it does not know; a time past the calendar's
+    # ends counts as unknown.
+    if seconds is None:
+        return None
+    try:
+        return (_EPOCH + timedelta(seconds=seconds)).astimezone(tz)
+    except OverflowError:
+        return None

@@ -5,8 +5,8 @@ import unittest
 
 from uplink.transport import Transport
 from uplink.whatsapp import (
+    MessengerError,
     WhatsAppClient,
-    WhatsAppError,
     normalize_number,
     parse_webhook,
     template_safe,
@@ -87,7 +87,7 @@ class SendTest(unittest.TestCase):
     def test_errors_explain_what_to_do(self):
         with FakeGraph() as graph:
             graph.fail_with = whatsapp_error(131030, "Recipient phone number not in allowed list")
-            with self.assertRaises(WhatsAppError) as caught:
+            with self.assertRaises(MessengerError) as caught:
                 client(graph).send_text("4915112345678", "hi")
         error = caught.exception
         self.assertEqual((error.code, error.status), (131030, 400))
@@ -97,14 +97,14 @@ class SendTest(unittest.TestCase):
     def test_expired_tokens_are_recognised(self):
         with FakeGraph() as graph:
             graph.fail_with = whatsapp_error(190, "Error validating access token", status=401)
-            with self.assertRaises(WhatsAppError) as caught:
+            with self.assertRaises(MessengerError) as caught:
                 client(graph).send_text("4915112345678", "hi")
         self.assertIn("24 hours", caught.exception.hint)
 
     def test_a_reply_without_an_id_is_an_error(self):
         with FakeGraph() as graph:
             graph.fail_with = json_reply({"messaging_product": "whatsapp"})
-            with self.assertRaises(WhatsAppError):
+            with self.assertRaises(MessengerError):
                 client(graph).send_text("4915112345678", "hi")
 
 

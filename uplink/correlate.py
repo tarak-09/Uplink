@@ -26,7 +26,6 @@ from typing import Collection, Iterable, Literal, Mapping, Sequence
 
 from .mesh import Link, Node, walk_upstream
 
-EvidenceKind = Literal["behind", "shared_uplink", "mesh_link", "co_booted", "name_family"]
 OutageKind = Literal["gateway", "cascade", "shared_neighbor", "site", "single"]
 
 _TRAILING_NUMBER = re.compile(r"[\W_]*\d+$")

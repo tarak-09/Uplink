@@ -101,40 +101,40 @@ class ValidationTest(unittest.TestCase):
         settings = load_settings({"MODEL_API_KEY": "k"}, None, data_dir=Path("x"), language=None)
         self.assertEqual(settings.data_dir, Path("x"))
         self.assertTrue(settings.has_model)
-        self.assertFalse(settings.has_whatsapp)
 
-    def test_the_whatsapp_provider(self):
+    def test_the_messenger(self):
         with self.assertRaises(ConfigError) as caught:
-            load_settings({"WHATSAPP_PROVIDER": "signal"}, None)
-        self.assertIn("WHATSAPP_PROVIDER", str(caught.exception))
-        cloud = load_settings({"WHATSAPP_TO": "4915112345678"}, None)
-        self.assertFalse(cloud.uses_twilio)
-        self.assertEqual(cloud.missing_for_alerts(), ["WHATSAPP_TOKEN", "WHATSAPP_PHONE_NUMBER_ID"])
-        self.assertEqual(cloud.missing_for_webhook()[-2:], ["WHATSAPP_APP_SECRET", "WHATSAPP_VERIFY_TOKEN"])
-        twilio = load_settings(
-            {"WHATSAPP_PROVIDER": "Twilio", "TWILIO_ACCOUNT_SID": "AC1", "WHATSAPP_TO": "+1 415 555 0123"}, None
-        )
-        self.assertTrue(twilio.uses_twilio)
-        self.assertEqual(twilio.missing_for_alerts(), ["TWILIO_AUTH_TOKEN"])
-        self.assertEqual(
-            twilio.missing_for_webhook(), ["TWILIO_AUTH_TOKEN"], "Twilio needs no app secret or verify token"
-        )
-        self.assertEqual(twilio.twilio_whatsapp_from, "14155238886")
+            load_settings({"MESSENGER": "signal"}, None)
+        self.assertIn("MESSENGER must be whatsapp", str(caught.exception))
+        whatsapp = load_settings({"WHATSAPP_TO": "4915112345678"}, None)
+        self.assertEqual((whatsapp.messenger, whatsapp.uses_telegram), ("whatsapp", False), "WhatsApp by default")
+        self.assertEqual(whatsapp.missing_for_alerts(), ["WHATSAPP_TOKEN", "WHATSAPP_PHONE_NUMBER_ID"])
+        self.assertEqual(whatsapp.missing_for_webhook()[-2:], ["WHATSAPP_APP_SECRET", "WHATSAPP_VERIFY_TOKEN"])
+
+    def test_the_old_provider_setting_says_what_to_rename_it_to(self):
+        for old, new in (
+            ("telegram", "MESSENGER=telegram"),
+            ("cloud", "MESSENGER=whatsapp"),
+            ("", "MESSENGER=whatsapp"),
+        ):
+            with self.subTest(old=old), self.assertRaises(ConfigError) as caught:
+                load_settings({"WHATSAPP_PROVIDER": old}, None)
+            self.assertIn("WHATSAPP_PROVIDER is now called MESSENGER: in .env, replace", str(caught.exception))
+            self.assertIn(new, str(caught.exception))
 
     def test_telegram(self):
         telegram = load_settings(
             {
-                "WHATSAPP_PROVIDER": "telegram",
+                "MESSENGER": "Telegram",
                 "TELEGRAM_BOT_TOKEN": "123456:AAE-secret_6",
                 "TELEGRAM_CHAT_ID": "-1001234",
             },
             None,
         )
         self.assertTrue(telegram.uses_telegram)
-        self.assertFalse(telegram.uses_twilio)
         self.assertEqual((telegram.telegram_chat_id, telegram.missing_for_alerts()), ("-1001234", []))
         self.assertNotIn("AAE-secret_6", repr(telegram))
-        bare = load_settings({"WHATSAPP_PROVIDER": "telegram", "WHATSAPP_TO": "4915112345678"}, None)
+        bare = load_settings({"MESSENGER": "telegram", "WHATSAPP_TO": "4915112345678"}, None)
         self.assertEqual(bare.missing_for_alerts(), ["TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID"])
         self.assertEqual(bare.missing_for_webhook(), ["TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID"], "no webhook secrets")
         self.assertEqual(load_settings({"TELEGRAM_CHAT_ID": "0042"}, None).telegram_chat_id, "42")

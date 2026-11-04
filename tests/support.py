@@ -2,10 +2,7 @@
 
 from __future__ import annotations
 
-import base64
 import gzip
-import hashlib
-import hmac
 import html
 import json
 import re
@@ -363,62 +360,6 @@ class FakeGraph(FakeServer):
         if request.headers.get("authorization") != "Bearer test-token":
             return 401, {}, b"unauthorized"
         return 200, {"Content-Type": "audio/ogg"}, self.media
-
-
-class FakeTwilio(FakeServer):
-    """Twilio's Messages API and media storage: sends are recorded; media redirects to storage
-    that, like S3, refuses requests carrying a second set of credentials."""
-
-    account_sid = "ACtest"
-    auth_token = "twilio-token"
-
-    def __init__(self) -> None:
-        super().__init__()
-        self.fail_with: Reply | None = None
-        self.media = b""
-        self.route("POST", rf"/2010-04-01/Accounts/{self.account_sid}/Messages\.json", self._message)
-        self.route("GET", r"/media/(?P<media>\w+)", self._media)
-        self.route("GET", r"/storage/(?P<media>\w+)", self._storage)
-
-    def sent(self) -> list[dict[str, str]]:
-        return [dict(parse_qsl(r.body.decode())) for r in self.requests_to(r"/2010-04-01/Accounts/\w+/Messages\.json")]
-
-    def bodies(self) -> list[str]:
-        return [m["Body"] for m in self.sent()]
-
-    def _authorised(self, request: Recorded) -> bool:
-        expected = base64.b64encode(f"{self.account_sid}:{self.auth_token}".encode()).decode()
-        return request.headers.get("authorization") == f"Basic {expected}"
-
-    def _message(self, request: Recorded, _: re.Match) -> Reply:
-        if not self._authorised(request):
-            return json_reply({"code": 20003, "message": "Authenticate", "status": 401}, 401)
-        if self.fail_with:
-            return self.fail_with
-        number = len(self.sent()) - 1  # this request is already recorded
-        return json_reply({"sid": f"SM{number:032d}", "status": "queued"}, 201)
-
-    def _media(self, request: Recorded, match: re.Match) -> Reply:
-        if not self._authorised(request):
-            return 401, {}, b"unauthorized"
-        return 307, {"Location": f"{self.url}/storage/{match['media']}?signature=abc"}, b""
-
-    def _storage(self, request: Recorded, match: re.Match) -> Reply:
-        if "authorization" in request.headers:
-            return 400, {}, b"Only one auth mechanism allowed"
-        return 200, {"Content-Type": "audio/ogg"}, self.media
-
-
-def twilio_error(code: int, message: str = "error", status: int = 400) -> Reply:
-    return json_reply(
-        {"code": code, "message": message, "more_info": f"https://www.twilio.com/docs/errors/{code}", "status": status},
-        status,
-    )
-
-
-def twilio_signature(auth_token: str, url: str, params: dict[str, str]) -> str:
-    payload = url + "".join(k + v for k, v in sorted(params.items()))
-    return base64.b64encode(hmac.new(auth_token.encode(), payload.encode(), hashlib.sha1).digest()).decode()
 
 
 TELEGRAM_TAGS = frozenset(

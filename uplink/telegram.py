@@ -23,7 +23,7 @@ from datetime import datetime, timezone
 from typing import Any, Callable
 
 from .transport import Transport, TransportError
-from .whatsapp import InboundMessage, Media, WhatsAppError
+from .whatsapp import InboundMessage, Media, MessengerError
 
 log = logging.getLogger(__name__)
 
@@ -82,11 +82,11 @@ class TelegramBot:
         sent = self._call("sendMessage", payload)
         message_id = sent.get("message_id") if isinstance(sent, dict) else None
         if not isinstance(message_id, int):
-            raise WhatsAppError("Telegram accepted the message but returned no message_id")
+            raise MessengerError("Telegram accepted the message but returned no message_id")
         return str(message_id)
 
     def send_template(self, to: str, name: str, language: str = "en_US", body_parameters: tuple[str, ...] = ()) -> str:
-        raise WhatsAppError(
+        raise MessengerError(
             "Telegram has no message templates. Alerts and replies go out as ordinary messages, "
             "which reach the chat at any time."
         )
@@ -96,7 +96,7 @@ class TelegramBot:
         info = self._call("getFile", {"file_id": media_id}, idempotent=True)
         path = info.get("file_path") if isinstance(info, dict) else None
         if not isinstance(path, str) or not path:
-            raise WhatsAppError("Telegram gave no download path for the voice note (bots can fetch files up to 20 MB)")
+            raise MessengerError("Telegram gave no download path for the voice note (bots can fetch files up to 20 MB)")
         try:
             response = self._transport.request("GET", f"{self._files}/{path}", timeout=60)
         except TransportError as exc:
@@ -134,27 +134,27 @@ class TelegramBot:
             raise self._refusal(answer, None)
         return answer.get("result")
 
-    def _error(self, error: TransportError) -> WhatsAppError:
+    def _error(self, error: TransportError) -> MessengerError:
         detail = error.json()
         if isinstance(detail, dict) and "description" in detail:
             return self._refusal(detail, error.status)
         if error.status is not None and error.status >= 400:
-            return WhatsAppError(
+            return MessengerError(
                 f"Telegram answered HTTP {error.status}", status=error.status, hint=_hint(error.status, "")
             )
         # The transport's message starts with the URL, and the URL holds the token.
         reason = self.scrub(str(error).rpartition(" failed: ")[2])
         if error.status is None:
-            return WhatsAppError(f"could not reach Telegram: {reason}")
-        return WhatsAppError(f"Telegram sent an unreadable answer: {reason}", status=error.status)
+            return MessengerError(f"could not reach Telegram: {reason}")
+        return MessengerError(f"Telegram sent an unreadable answer: {reason}", status=error.status)
 
-    def _refusal(self, answer: Any, status: int | None) -> WhatsAppError:
+    def _refusal(self, answer: Any, status: int | None) -> MessengerError:
         detail = answer if isinstance(answer, dict) else {}
         description = self.scrub(str(detail.get("description") or "Telegram sent an unexpected answer"))
         raw_code = detail.get("error_code")
         code = raw_code if isinstance(raw_code, int) else status
         suffix = f" (Telegram code {code})" if code is not None else ""
-        return WhatsAppError(f"{description}{suffix}", code=code, status=status, hint=_hint(code, description))
+        return MessengerError(f"{description}{suffix}", code=code, status=status, hint=_hint(code, description))
 
 
 def to_html(text: str) -> str:
@@ -245,8 +245,8 @@ class TelegramPoller:
                 updates = self._fetch()
             except Exception as exc:  # outlive network trouble; no traceback, which could show the token
                 failures += 1
-                hint = exc.hint if isinstance(exc, WhatsAppError) else None
-                detail = str(exc) if isinstance(exc, WhatsAppError) else f"{type(exc).__name__}: {exc}"
+                hint = exc.hint if isinstance(exc, MessengerError) else None
+                detail = str(exc) if isinstance(exc, MessengerError) else f"{type(exc).__name__}: {exc}"
                 log.error(
                     "could not fetch Telegram messages: %s%s", self.bot.scrub(detail), f" | {hint}" if hint else ""
                 )

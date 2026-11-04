@@ -1,9 +1,9 @@
 """The WhatsApp webhook: verified requests in, answers (typed or spoken questions) out.
 
-`/webhook` takes Meta's Cloud API calls, `/twilio` takes Twilio's sandbox calls. Both expect a
-fast answer, so requests are checked and queued, and a worker thread does the slow part:
-downloading voice notes, transcribing, asking Muse Spark, replying. Telegram needs no webhook:
-`telegram.TelegramPoller` fetches the bot's messages and puts them in the same queue.
+`/webhook` takes Meta's Cloud API calls. Meta expects a fast answer, so requests are checked and
+queued, and a worker thread does the slow part: downloading voice notes, transcribing, asking
+Muse Spark, replying. Telegram needs no webhook: `telegram.TelegramPoller` fetches the bot's
+messages and puts them in the same queue.
 """
 
 from __future__ import annotations
@@ -24,13 +24,12 @@ from .assistant import Assistant
 from .config import Settings
 from .muse import MetaModelAPI, ModelAPIError
 from .store import Store
-from .twilio import parse_twilio_webhook, verify_twilio_signature
 from .voice import AudioError, ffmpeg_available, to_wav
 from .whatsapp import (
     DeliveryStatus,
     InboundMessage,
     Messenger,
-    WhatsAppError,
+    MessengerError,
     normalize_number,
     parse_webhook,
     verify_signature,
@@ -40,7 +39,6 @@ from .writer import Draft
 log = logging.getLogger(__name__)
 
 MAX_BODY = 1024 * 1024
-EMPTY_TWIML = '<?xml version="1.0" encoding="UTF-8"?><Response></Response>'
 ASR_LANGUAGES = {
     "english": ["English", "Telugu", "Hindi"],
     "telugu": ["Telugu", "English"],
@@ -54,14 +52,14 @@ class WebhookApp:
         self,
         *,
         settings: Settings,
-        whatsapp: Messenger,
+        messenger: Messenger,
         assistant: Assistant,
         store: Store,
         model: MetaModelAPI | None = None,
         clock: Callable[[], datetime] | None = None,
     ) -> None:
         self.settings = settings
-        self.whatsapp = whatsapp
+        self.messenger = messenger
         self.assistant = assistant
         self.store = store
         self.model = model
@@ -106,20 +104,6 @@ class WebhookApp:
             self._enqueue(message)
         return 200
 
-    def receive_twilio(self, body: bytes, url: str, signature: str | None) -> int:
-        """Accept a call from Twilio's sandbox. `url` must be the public URL Twilio called."""
-        try:
-            params = parse_qsl(body.decode("utf-8"), keep_blank_values=True)
-        except UnicodeDecodeError:
-            return 400
-        if not verify_twilio_signature(self.settings.twilio_auth_token, url, params, signature):
-            log.warning("rejected a Twilio call with a missing or wrong signature (checked against %s)", url)
-            return 403
-        message = parse_twilio_webhook(dict(params))
-        if message is not None:
-            self._enqueue(message)
-        return 200
-
     def _enqueue(self, message: InboundMessage) -> None:
         if self._already_seen(message.id):
             return  # providers retry deliveries they think failed
@@ -141,8 +125,8 @@ class WebhookApp:
         else:
             draft = Draft(templates.text(self.settings.language, "help"), "template")
         try:
-            self.whatsapp.send_text(message.sender, draft.text, reply_to=message.id)
-        except WhatsAppError as exc:
+            self.messenger.send_text(message.sender, draft.text, reply_to=message.id)
+        except MessengerError as exc:
             self.store.log("reply_failed", kind=message.kind, error=str(exc))
             log.error("could not reply: %s%s", exc, f" | {exc.hint}" if exc.hint else "")
             return
@@ -153,10 +137,10 @@ class WebhookApp:
         if self.model is None or not ffmpeg_available(self.settings.ffmpeg):
             return Draft(templates.text(language, "voice_unavailable"), "template")
         try:
-            media = self.whatsapp.download_media(message.media_id, message.media_url)
+            media = self.messenger.download_media(message.media_id, message.media_url)
             wav = to_wav(media.content, ffmpeg=self.settings.ffmpeg)
             transcript = self.model.transcribe(wav, languages=ASR_LANGUAGES[language], keywords=ASR_KEYWORDS)
-        except (WhatsAppError, AudioError, ModelAPIError) as exc:
+        except (MessengerError, AudioError, ModelAPIError) as exc:
             log.warning("voice note failed: %s", exc)
             return Draft(templates.text(language, "voice_failed"), "template")
         if not transcript.text:
@@ -185,7 +169,7 @@ class WebhookApp:
     def _note_status(self, status: DeliveryStatus) -> None:
         if status.status != "failed":
             return
-        hint = WhatsAppError("", code=status.error_code).hint or ""
+        hint = MessengerError("", code=status.error_code).hint or ""
         self.store.log("delivery_failed", code=status.error_code, title=status.error_title)
         log.error("WhatsApp could not deliver a message: %s (code %s). %s", status.error_title, status.error_code, hint)
 
@@ -205,8 +189,7 @@ def make_server(app: WebhookApp, host: str, port: int) -> ThreadingHTTPServer:
                 self._reply(404, "not found")
 
         def do_POST(self) -> None:
-            path = urlsplit(self.path).path
-            if path not in {"/webhook", "/twilio"}:
+            if urlsplit(self.path).path != "/webhook":
                 self._reply(404, "not found")
                 return
             try:
@@ -216,26 +199,13 @@ def make_server(app: WebhookApp, host: str, port: int) -> ThreadingHTTPServer:
             if not 0 < length <= MAX_BODY:
                 self._reply(413 if length > MAX_BODY else 400, "bad request")
                 return
-            body = self.rfile.read(length)
-            if path == "/twilio":
-                status = app.receive_twilio(body, self._public_url(), self.headers.get("X-Twilio-Signature"))
-                self._reply(status, EMPTY_TWIML if status == 200 else "rejected", "text/xml")
-                return
-            status = app.receive(body, self.headers.get("X-Hub-Signature-256"))
+            status = app.receive(self.rfile.read(length), self.headers.get("X-Hub-Signature-256"))
             self._reply(status, "ok" if status == 200 else "rejected")
 
-        def _public_url(self) -> str:
-            """The URL Twilio signed: as configured, or as seen through the tunnel."""
-            if app.settings.twilio_webhook_url:
-                return app.settings.twilio_webhook_url
-            proto = self.headers.get("X-Forwarded-Proto", "https")
-            host = self.headers.get("X-Forwarded-Host") or self.headers.get("Host", "")
-            return f"{proto}://{host}{self.path}"
-
-        def _reply(self, status: int, text: str, content_type: str = "text/plain") -> None:
+        def _reply(self, status: int, text: str) -> None:
             body = text.encode("utf-8")
             self.send_response(status)
-            self.send_header("Content-Type", f"{content_type}; charset=utf-8")
+            self.send_header("Content-Type", "text/plain; charset=utf-8")
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
             self.wfile.write(body)

@@ -19,6 +19,7 @@ from typing import Callable, Sequence
 from . import __version__, templates
 from .app import (
     make_assistant,
+    make_messenger,
     make_model,
     make_monitor,
     make_sender,
@@ -26,7 +27,6 @@ from .app import (
     make_telegram_poller,
     make_transport,
     make_webhook,
-    make_whatsapp,
     make_writer,
 )
 from .config import ConfigError, Settings, load_settings
@@ -43,7 +43,7 @@ from .server import ASR_KEYWORDS, ASR_LANGUAGES, WebhookApp, make_server
 from .store import Store, StoreError
 from .telegram import recent_chats
 from .voice import AudioError, ffmpeg_available, to_wav
-from .whatsapp import WhatsAppError
+from .whatsapp import MessengerError
 
 TEST_MESSAGE = "Uplink test: if you can read this, outage alerts will reach you here."
 Handler = Callable[[argparse.Namespace, Settings], int]
@@ -66,7 +66,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     except BrokenPipeError:  # output piped into `head` and closed early: not an error
         _silence_stdout()
         return 0
-    except (FeedError, StoreError, ModelAPIError, WhatsAppError, AudioError, SendError, OSError) as exc:
+    except (FeedError, StoreError, ModelAPIError, MessengerError, AudioError, SendError, OSError) as exc:
         print(f"Error: {exc}", file=sys.stderr)
         return 1
     except KeyboardInterrupt:
@@ -285,18 +285,18 @@ def cmd_ask(args: argparse.Namespace, settings: Settings) -> int:
 
 
 def cmd_send_test(args: argparse.Namespace, settings: Settings) -> int:
-    whatsapp = make_whatsapp(settings, make_transport(settings))
+    messenger = make_messenger(settings, make_transport(settings))
     to = settings.telegram_chat_id if settings.uses_telegram else settings.whatsapp_to
-    if whatsapp is None or not to:
+    if messenger is None or not to:
         missing = ", ".join(settings.missing_for_alerts())
         raise ConfigError(f"set {missing} (see docs/WHATSAPP_SETUP.md)")
     service = "Telegram" if settings.uses_telegram else "WhatsApp"
     try:
         if args.template:
-            ref = whatsapp.send_template(to, "hello_world", "en_US")
+            ref = messenger.send_template(to, "hello_world", "en_US")
         else:
-            ref = whatsapp.send_text(to, args.text)
-    except WhatsAppError as exc:
+            ref = messenger.send_text(to, args.text)
+    except MessengerError as exc:
         print(f"{service} refused the message: {exc}")
         if exc.hint:
             print(f"What to do: {exc.hint}")
@@ -304,11 +304,6 @@ def cmd_send_test(args: argparse.Namespace, settings: Settings) -> int:
     print(f"{service} accepted the message (id {ref}).")
     if settings.uses_telegram:
         print("It is in the bot's chat now. Alerts arrive the same way, at any time of day.")
-    elif settings.uses_twilio:
-        print(
-            "If it does not arrive within a minute: from WhatsApp, send your join code to +1 415 523 8886\n"
-            "(the sandbox forgets you after three days), or any message if you joined earlier, then try again."
-        )
     else:
         print(
             "If it does not arrive within a minute, WhatsApp dropped it after accepting it. To see why, open the\n"
@@ -324,7 +319,7 @@ def cmd_telegram_chat_id(args: argparse.Namespace, settings: Settings) -> int:
     bot = make_telegram_bot(settings, make_transport(settings))
     try:
         chats = recent_chats(bot.get_updates())  # no offset: nothing is confirmed, `serve` still sees them all
-    except WhatsAppError as exc:
+    except MessengerError as exc:
         print(f"Telegram refused: {exc}")
         if exc.hint:
             print(f"What to do: {exc.hint}")
@@ -411,7 +406,7 @@ def _send_alert(incident: Incident, snapshot: Snapshot, settings: Settings, *, d
     writer = make_writer(settings, make_model(settings, transport))
     facts = outage_facts(incident, snapshot, settings)
     draft = writer.write(facts)
-    sender = make_sender(settings, make_whatsapp(settings, transport), dry_run=dry_run)
+    sender = make_sender(settings, make_messenger(settings, transport), dry_run=dry_run)
     ref = sender.send(draft.text)
     if not isinstance(sender, ConsoleSender):  # a dry run only prints it; nobody can reply
         Store(settings.data_dir).save_last_alert(facts)  # replies such as "why?" are about it
@@ -421,7 +416,6 @@ def _send_alert(incident: Incident, snapshot: Snapshot, settings: Settings, *, d
 
 
 def _setup_status(settings: Settings) -> list[tuple[str, str]]:
-    provider = "Twilio sandbox" if settings.uses_twilio else "Cloud API"
     alerts_missing = settings.missing_for_alerts()
     webhook_missing = [name for name in settings.missing_for_webhook() if name not in alerts_missing]
     if settings.uses_telegram:
@@ -435,9 +429,9 @@ def _setup_status(settings: Settings) -> list[tuple[str, str]]:
     else:
         messages = (
             "WhatsApp",
-            f"ready through the {provider}, alerts go to +{settings.whatsapp_to}"
+            f"ready through the Cloud API, alerts go to +{settings.whatsapp_to}"
             if not alerts_missing
-            else f"{provider}: missing " + ", ".join(alerts_missing),
+            else "Cloud API: missing " + ", ".join(alerts_missing),
         )
         replies = ("Webhook", "ready" if not webhook_missing else "missing " + ", ".join(webhook_missing))
     return [
@@ -479,9 +473,8 @@ def _start_telegram(settings: Settings, app: WebhookApp, stop: threading.Event) 
 
 def _webhook_banner(settings: Settings) -> str:
     port = settings.webhook_port
-    path, who = ("/twilio", "Twilio") if settings.uses_twilio else ("/webhook", "Meta")
     return (
-        f"Webhook listening on http://{settings.webhook_host}:{port}{path}\n"
-        f"Make it reachable for {who} with:  cloudflared tunnel --url http://localhost:{port}\n"
-        f"then use the address it prints, followed by {path}, as the webhook URL."
+        f"Webhook listening on http://{settings.webhook_host}:{port}/webhook\n"
+        f"Make it reachable for Meta with:  cloudflared tunnel --url http://localhost:{port}\n"
+        "then use the address it prints, followed by /webhook, as the webhook URL."
     )

@@ -16,7 +16,7 @@ from .feed import Feed, FeedError
 from .incidents import Change, IncidentTracker, Notice, Policy
 from .mesh import Snapshot
 from .store import Store
-from .whatsapp import Messenger, WhatsAppError
+from .whatsapp import Messenger, MessengerError
 from .writer import Writer
 
 log = logging.getLogger(__name__)
@@ -44,7 +44,7 @@ class Sender(Protocol):
         """Deliver a message and return a reference for the log."""
 
 
-class WhatsAppSender:
+class MessengerSender:
     def __init__(
         self,
         client: Messenger,
@@ -69,7 +69,7 @@ class WhatsAppSender:
             if self.template:
                 return self.client.send_template(self.to, self.template, self.template_language, (text,))
             return self.client.send_text(self.to, text)
-        except WhatsAppError as exc:
+        except MessengerError as exc:
             raise SendError(f"{exc}" + (f" | {exc.hint}" if exc.hint else "")) from None
 
 

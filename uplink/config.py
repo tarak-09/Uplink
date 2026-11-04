@@ -11,7 +11,7 @@ from urllib.parse import urlparse
 
 LANGUAGES = {"english": "english", "en": "english", "telugu": "telugu", "te": "telugu", "hindi": "hindi", "hi": "hindi"}
 REASONING_EFFORTS = ("minimal", "low", "medium", "high", "xhigh")
-PROVIDERS = ("cloud", "twilio", "telegram")
+MESSENGERS = ("whatsapp", "telegram")
 MIN_POLL_SECONDS = 60
 _LOCAL_HOSTS = {"localhost", "127.0.0.1", "::1"}
 
@@ -46,8 +46,8 @@ class Settings:
     reasoning_effort: str = "low"
     asr_model: str = "muse-voice-transcribe-1.0"
 
-    # Messages: WhatsApp's Cloud API ("cloud"), Twilio's WhatsApp sandbox ("twilio"), or a Telegram bot ("telegram")
-    whatsapp_provider: str = "cloud"
+    # Messages: WhatsApp's Cloud API ("whatsapp") or a Telegram bot ("telegram")
+    messenger: str = "whatsapp"
 
     # WhatsApp Cloud API
     whatsapp_token: str = field(default="", repr=False)
@@ -59,13 +59,6 @@ class Settings:
     whatsapp_alert_template: str = ""
     whatsapp_template_language: str = "en"
     graph_base_url: str = "https://graph.facebook.com"
-
-    # Twilio Sandbox for WhatsApp
-    twilio_account_sid: str = ""
-    twilio_auth_token: str = field(default="", repr=False)
-    twilio_whatsapp_from: str = "14155238886"
-    twilio_webhook_url: str = ""
-    twilio_base_url: str = "https://api.twilio.com"
 
     # Telegram bot (alerts and replies go to one chat)
     telegram_bot_token: str = field(default="", repr=False)
@@ -84,41 +77,28 @@ class Settings:
         return bool(self.model_api_key)
 
     @property
-    def uses_twilio(self) -> bool:
-        return self.whatsapp_provider == "twilio"
-
-    @property
     def uses_telegram(self) -> bool:
-        return self.whatsapp_provider == "telegram"
-
-    @property
-    def has_whatsapp(self) -> bool:
-        return not self.missing_for_alerts()
+        return self.messenger == "telegram"
 
     def missing_for_alerts(self) -> list[str]:
         """The variables still needed before alerts can reach WHATSAPP_TO (or TELEGRAM_CHAT_ID)."""
         if self.uses_telegram:
             needed = {"TELEGRAM_BOT_TOKEN": self.telegram_bot_token, "TELEGRAM_CHAT_ID": self.telegram_chat_id}
-            return [name for name, value in needed.items() if not value]
-        if self.uses_twilio:
-            needed = {"TWILIO_ACCOUNT_SID": self.twilio_account_sid, "TWILIO_AUTH_TOKEN": self.twilio_auth_token}
         else:
-            needed = {"WHATSAPP_TOKEN": self.whatsapp_token, "WHATSAPP_PHONE_NUMBER_ID": self.whatsapp_phone_number_id}
-        needed["WHATSAPP_TO"] = self.whatsapp_to
+            needed = {
+                "WHATSAPP_TOKEN": self.whatsapp_token,
+                "WHATSAPP_PHONE_NUMBER_ID": self.whatsapp_phone_number_id,
+                "WHATSAPP_TO": self.whatsapp_to,
+            }
         return [name for name, value in needed.items() if not value]
 
     def missing_for_webhook(self) -> list[str]:
         """The variables still needed before Uplink can answer messages."""
-        if self.uses_telegram:
-            return self.missing_for_alerts()  # no webhook: Uplink fetches the bot's messages itself
         missing = self.missing_for_alerts()
-        if not self.uses_twilio:
-            extra = {
-                "WHATSAPP_APP_SECRET": self.whatsapp_app_secret,
-                "WHATSAPP_VERIFY_TOKEN": self.whatsapp_verify_token,
-            }
-            missing += [name for name, value in extra.items() if not value]
-        return missing
+        if self.uses_telegram:
+            return missing  # no webhook: Uplink fetches the bot's messages itself
+        extra = {"WHATSAPP_APP_SECRET": self.whatsapp_app_secret, "WHATSAPP_VERIFY_TOKEN": self.whatsapp_verify_token}
+        return missing + [name for name, value in extra.items() if not value]
 
     @property
     def feed_is_local(self) -> bool:
@@ -133,11 +113,8 @@ class Settings:
             )
         if self.stale_after < 90:
             raise ConfigError("STALE_AFTER_SECONDS must be at least 90; nodes answer about once a minute.")
-        if self.whatsapp_provider not in PROVIDERS:
-            raise ConfigError(
-                "WHATSAPP_PROVIDER must be cloud (Meta's WhatsApp Cloud API), twilio (Twilio's sandbox) "
-                "or telegram (a Telegram bot)"
-            )
+        if self.messenger not in MESSENGERS:
+            raise ConfigError("MESSENGER must be whatsapp (Meta's WhatsApp Cloud API) or telegram (a Telegram bot)")
         if self.reasoning_effort not in REASONING_EFFORTS:
             raise ConfigError(f"MODEL_REASONING_EFFORT must be one of: {', '.join(REASONING_EFFORTS)}")
         if not re.fullmatch(r"v\d+\.\d+", self.whatsapp_api_version):
@@ -157,6 +134,7 @@ def load_settings(
     """Build Settings from `environ` (default: os.environ) on top of `env_file`, then validate."""
     merged = dict(read_env_file(env_file)) if env_file and env_file.is_file() else {}
     merged.update(os.environ if environ is None else environ)
+    _refuse_renamed(merged)
     values: dict[str, Any] = {}
     for variable, (attribute, convert) in _VARIABLES.items():
         raw = merged.get(variable, "").strip()
@@ -171,6 +149,17 @@ def load_settings(
     settings = Settings(**values)
     settings.validate()
     return settings
+
+
+def _refuse_renamed(merged: Mapping[str, str]) -> None:
+    """WHATSAPP_PROVIDER became MESSENGER. The old name stops Uplink and says what to write instead."""
+    if "WHATSAPP_PROVIDER" not in merged:
+        return
+    new = "telegram" if merged["WHATSAPP_PROVIDER"].strip().lower() == "telegram" else "whatsapp"
+    raise ConfigError(
+        f"WHATSAPP_PROVIDER is now called MESSENGER: in .env, replace the WHATSAPP_PROVIDER line with "
+        f"MESSENGER={new} (whatsapp for the WhatsApp Cloud API, telegram for a Telegram bot)"
+    )
 
 
 def read_env_file(path: Path) -> dict[str, str]:
@@ -270,7 +259,7 @@ _VARIABLES: dict[str, tuple[str, Callable[[str], Any]]] = {
     "MODEL_NAME": ("model_name", str),
     "MODEL_REASONING_EFFORT": ("reasoning_effort", str.lower),
     "ASR_MODEL": ("asr_model", str),
-    "WHATSAPP_PROVIDER": ("whatsapp_provider", str.lower),
+    "MESSENGER": ("messenger", str.lower),
     "WHATSAPP_TOKEN": ("whatsapp_token", str),
     "WHATSAPP_PHONE_NUMBER_ID": ("whatsapp_phone_number_id", str),
     "WHATSAPP_TO": ("whatsapp_to", _phone),
@@ -280,11 +269,6 @@ _VARIABLES: dict[str, tuple[str, Callable[[str], Any]]] = {
     "WHATSAPP_ALERT_TEMPLATE": ("whatsapp_alert_template", str),
     "WHATSAPP_TEMPLATE_LANGUAGE": ("whatsapp_template_language", str),
     "GRAPH_BASE_URL": ("graph_base_url", _url),
-    "TWILIO_ACCOUNT_SID": ("twilio_account_sid", str),
-    "TWILIO_AUTH_TOKEN": ("twilio_auth_token", str),
-    "TWILIO_WHATSAPP_FROM": ("twilio_whatsapp_from", _phone),
-    "TWILIO_WEBHOOK_URL": ("twilio_webhook_url", _url),
-    "TWILIO_BASE_URL": ("twilio_base_url", _url),
     "TELEGRAM_BOT_TOKEN": ("telegram_bot_token", _bot_token),
     "TELEGRAM_CHAT_ID": ("telegram_chat_id", _chat_id),
     "TELEGRAM_BASE_URL": ("telegram_base_url", _url),

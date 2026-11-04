@@ -19,7 +19,6 @@ from .support import (
     FakeGraph,
     FakeMeta,
     FakeTelegram,
-    FakeTwilio,
     MeshBuilder,
     json_reply,
     make_settings,
@@ -42,7 +41,6 @@ class MonitorTestCase(unittest.TestCase):
         self.feed = FakeFeed().__enter__()
         self.meta = FakeMeta().__enter__()
         self.graph = FakeGraph().__enter__()
-        self.twilio = FakeTwilio().__enter__()
         self.telegram = FakeTelegram().__enter__()
         self.meta.default_reply = faithful_reply
         self.clock = Clock()
@@ -60,7 +58,6 @@ class MonitorTestCase(unittest.TestCase):
             model_api_key="key-123",
             model_base_url=self.meta.base_url,
             graph_base_url=self.graph.url,
-            twilio_base_url=self.twilio.url,
             telegram_base_url=self.telegram.url,
             record_snapshots=True,
             **self.settings_overrides,
@@ -69,7 +66,7 @@ class MonitorTestCase(unittest.TestCase):
         self.monitor = self.new_monitor()
 
     def tearDown(self):
-        for fake in (self.feed, self.meta, self.graph, self.twilio, self.telegram):
+        for fake in (self.feed, self.meta, self.graph, self.telegram):
             fake.__exit__()
         self.folder.cleanup()
 
@@ -212,32 +209,9 @@ class TemplateModeTest(MonitorTestCase):
         )
 
 
-class TwilioModeTest(MonitorTestCase):
-    settings_overrides: ClassVar[dict[str, str]] = {
-        "whatsapp_provider": "twilio",
-        "twilio_account_sid": FakeTwilio.account_sid,
-        "twilio_auth_token": FakeTwilio.auth_token,
-        "whatsapp_alert_template": "ignored_by_the_sandbox",
-    }
-
-    def test_alerts_and_recoveries_go_through_the_sandbox(self):
-        self.poll()
-        self.mesh.drop("a", "b", ago=40)
-        self.poll()
-        self.assertEqual(self.poll().sent, 1)
-        self.mesh.restore("a", "b")
-        self.assertEqual(self.poll().sent, 1)
-        self.assertEqual(
-            self.twilio.bodies(),
-            ["*a.home is down*\n2 nodes offline since 12:00 Munich time.", "*Back online: a.home*\nIt lasted 3 min."],
-        )
-        self.assertEqual({m["To"] for m in self.twilio.sent()}, {"whatsapp:+4915112345678"})
-        self.assertEqual(self.graph.sent(), [])
-
-
 class TelegramModeTest(MonitorTestCase):
     settings_overrides: ClassVar[dict[str, str]] = {
-        "whatsapp_provider": "telegram",
+        "messenger": "telegram",
         "telegram_bot_token": FakeTelegram.token,
         "telegram_chat_id": str(FakeTelegram.chat_id),
         "whatsapp_alert_template": "ignored_by_telegram",
@@ -260,7 +234,7 @@ class TelegramModeTest(MonitorTestCase):
         )
         self.assertEqual({m["chat_id"] for m in self.telegram.sent()}, {FakeTelegram.chat_id})
         self.assertEqual([e["ref"] for e in self.events("alert_sent")], ["1", "2"])
-        self.assertEqual((self.graph.sent(), self.twilio.sent()), ([], []))
+        self.assertEqual(self.graph.sent(), [])
 
     def test_a_refused_alert_is_retried_on_the_next_poll(self):
         self.telegram.chats = set()  # nobody has pressed Start yet

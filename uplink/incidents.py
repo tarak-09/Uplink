@@ -104,10 +104,6 @@ class Incident:
     def users(self) -> int:
         return sum(m.clients for m in self.members.values())
 
-    @property
-    def is_open(self) -> bool:
-        return self.closed_reason is None
-
     @classmethod
     def from_outage(cls, outage: Outage, nodes: Mapping[str, Node], *, detected_at: datetime) -> Incident:
         """An incident seen in a single snapshot, where client counts of dead nodes are unknown."""

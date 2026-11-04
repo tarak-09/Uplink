@@ -2,7 +2,8 @@
 
 You need a Meta developer account (log in with Facebook), your phone with WhatsApp, and about
 fifteen minutes. Meta lends you a free test business number, so you do not need a business
-or a second SIM.
+or a second SIM. No business account, or Meta locked it? [Use a Telegram bot](#use-a-telegram-bot-instead):
+four steps, no webhook.
 
 ## 1. Create the app and get the test number
 
@@ -96,69 +97,41 @@ A quick tunnel gets a new address every time it starts; paste the new one into t
   `WHATSAPP_ALERT_TEMPLATE` to its name and `WHATSAPP_TEMPLATE_LANGUAGE=en`. Uplink then sends every
   alert through it (line breaks become " · ", as templates require).
 
-## Meta locked the account? Use Twilio's sandbox
+## Use a Telegram bot instead
 
 Some brand-new WhatsApp Business Accounts are locked by Meta's automatic checks: messages are
 accepted, then fail with error **131031, "Business Account locked"** under **Check test webhooks**.
-A review can take days. Twilio's WhatsApp sandbox sends through Twilio's own approved account, so
-it works in the meantime, and alerts still arrive on your WhatsApp.
-
-1. Sign up at [twilio.com/try-twilio](https://www.twilio.com/try-twilio); the free trial is enough.
-2. In the Twilio Console open **Messaging > Try it out > Send a WhatsApp message**. Send the
-   `join ...` code it shows from your WhatsApp to **+1 415 523 8886** and wait for the confirmation.
-3. On the Console home page, under **Account Info**, copy the **Account SID** and **Auth Token**:
-   ```
-   WHATSAPP_PROVIDER=twilio
-   TWILIO_ACCOUNT_SID=AC...
-   TWILIO_AUTH_TOKEN=...
-   WHATSAPP_TO=14155550123
-   ```
-4. `python3 -m uplink send-test`: the message arrives from +1 415 523 8886.
-5. For texts and voice notes, run `python3 -m uplink run` and the tunnel as in step 5 above, then in
-   the Twilio Console open the sandbox settings and set **When a message comes in** to the tunnel
-   address followed by `/twilio`, method **POST**, and save. No app secret or verify token is needed:
-   Uplink checks Twilio's signature with your Auth Token.
-
-The sandbox forgets your number after three days (send the join code again) and, like the test
-number, only delivers ordinary messages within 24 hours of your last message to it. It cannot send
-templates, so `send-test --template` and `WHATSAPP_ALERT_TEMPLATE` do not apply.
-
-If Meta unlocks your account later, set `WHATSAPP_PROVIDER=cloud` to switch back.
-
-## No WhatsApp at all? Use a Telegram bot
-
-When Meta has locked the account and Twilio's trial number only sends its own templates (error
-**21654, "ContentSid Required"**), a Telegram bot can stand in. It needs no business account, no
+A review can take days. A Telegram bot stands in meanwhile. It needs no business account, no
 webhook and no tunnel: Uplink fetches the bot's messages itself.
 
 1. In Telegram, message **@BotFather**, send `/newbot`, and choose a name and a username ending in
    `bot`. BotFather answers with the bot's token, which works like a password.
 2. Open your new bot (BotFather links to it) and press **Start**.
-3. Add the token to `.env`, then find your chat id:
+3. Select Telegram and add the token in `.env`, then find your chat id:
    ```
-   WHATSAPP_PROVIDER=telegram
+   MESSENGER=telegram
    TELEGRAM_BOT_TOKEN=123456789:AAE...
    ```
    ```bash
    python3 -m uplink telegram-chat-id
    ```
    It lists the chats that messaged the bot. Add yours as `TELEGRAM_CHAT_ID=...`.
-4. `python3 -m uplink send-test`: the test message arrives in the bot's chat.
-5. `python3 -m uplink run` sends the alerts there and answers texts and voice notes from that chat
+4. `python3 -m uplink send-test`: the test message arrives in the bot's chat. Then
+   `python3 -m uplink run` sends the alerts there and answers texts and voice notes from that chat
    only. Telegram has no 24-hour window and no templates, so `send-test --template` and
    `WHATSAPP_ALERT_TEMPLATE` do not apply.
 
 A group works too: add the bot and use the group's id, which starts with `-`. In a group the bot
 only sees commands such as `/status` unless you turn off privacy mode (`/setprivacy` in @BotFather).
 Only one program can fetch a bot's messages at a time, so stop `uplink run` before running
-`telegram-chat-id` again. Set `WHATSAPP_PROVIDER` back to `cloud` or `twilio` to return to WhatsApp.
+`telegram-chat-id` again. Set `MESSENGER=whatsapp` (or remove the line) to return to WhatsApp.
 
 ## When something fails
 
 | What you see | What it means | What to do |
 |---|---|---|
 | code 131030 | your number is not on the recipient list | add it under API Setup > To and confirm the code |
-| `failed` with 131031 under Check test webhooks | Meta locked the new business account | request a review, and use Twilio's sandbox meanwhile (above) |
+| `failed` with 131031 under Check test webhooks | Meta locked the new business account | request a review, and use a Telegram bot meanwhile (above) |
 | `delivery_failed` with 131047 in the log | the 24-hour window is closed | send "hi" to the test number |
 | code 190 | the access token expired | generate a new one, or use a system user token |
 | code 100 | a parameter was rejected | `WHATSAPP_PHONE_NUMBER_ID` must be the ID, not the number |
@@ -166,11 +139,6 @@ Only one program can fetch a bot's messages at a time, so stop `uplink run` befo
 | "Verify and save" fails | Meta could not reach Uplink | is `uplink run` running, the tunnel address current, the path `/webhook`, the verify token identical? |
 | messages arrive, no reply | Uplink ignored them | it only answers `WHATSAPP_TO` (with Telegram, `TELEGRAM_CHAT_ID`); "rejected a webhook call" in the log means a wrong app secret |
 | "Voice notes need ffmpeg and a Model API key" | the laptop is missing one of them | install ffmpeg, set `MODEL_API_KEY` |
-| Twilio code 63015 | your number has not joined the sandbox, or its three days ran out | send the join code to +1 415 523 8886 |
-| Twilio code 63016 | more than 24 hours since you messaged the sandbox | send it "hi" |
-| Twilio code 20003 | wrong Account SID or Auth Token | copy them again from the Console home page |
-| "rejected a Twilio call" in the log | the signature did not match the address | set `TWILIO_WEBHOOK_URL` to the exact address you typed into the Twilio Console |
-| Twilio code 21654 | this Twilio number sends only templates | use a Telegram bot (above) |
 | Telegram code 401 | wrong bot token | copy `TELEGRAM_BOT_TOKEN` again from @BotFather |
 | Telegram "chat not found" | wrong `TELEGRAM_CHAT_ID`, or nobody pressed Start | press Start in the bot's chat, then run `uplink telegram-chat-id` |
 | Telegram code 409 in the log | another program is fetching the bot's messages | stop the second `uplink serve` or `run` |

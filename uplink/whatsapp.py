@@ -19,7 +19,7 @@ HINTS = {
     100: "A parameter was rejected. WHATSAPP_PHONE_NUMBER_ID must be the phone number ID from API Setup, not the phone number.",
     190: "The access token expired or is wrong. Temporary tokens last 24 hours: generate a new one in API Setup, or use a system user token.",
     131026: "WhatsApp could not deliver to that number. Check that it has WhatsApp and has accepted the latest terms.",
-    131031: "Meta locked this WhatsApp Business Account, which happens to some brand-new accounts. Request a review in Business Support Home, or switch to Twilio's sandbox with WHATSAPP_PROVIDER=twilio (docs/WHATSAPP_SETUP.md).",
+    131031: "Meta locked this WhatsApp Business Account, which happens to some brand-new accounts. Request a review in Business Support Home, or use a Telegram bot meanwhile: MESSENGER=telegram (docs/WHATSAPP_SETUP.md).",
     131030: "Your number is not on the test number's recipient list. Add it under WhatsApp > API Setup > To, then confirm the code WhatsApp sends you.",
     131047: 'More than 24 hours since your number last messaged the business number. Send it any message ("hi") on WhatsApp, or use an approved template (WHATSAPP_ALERT_TEMPLATE).',
     131056: "Too many messages to the same number in a short time. Wait a minute.",
@@ -30,7 +30,9 @@ HINTS = {
 }
 
 
-class WhatsAppError(Exception):
+class MessengerError(Exception):
+    """WhatsApp or Telegram refused or failed; `hint` says what to do for the common setup errors."""
+
     def __init__(self, message: str, *, code: int | None = None, status: int | None = None, hint: str | None = None):
         super().__init__(message)
         self.code = code
@@ -74,7 +76,7 @@ class DeliveryStatus:
 
 
 class Messenger(Protocol):
-    """What Uplink needs from a WhatsApp provider: the Cloud API, or Twilio's sandbox."""
+    """What Uplink needs from a messenger: WhatsApp's Cloud API, or a Telegram bot."""
 
     def send_text(self, to: str, body: str, *, reply_to: str | None = None) -> str: ...
 
@@ -127,9 +129,6 @@ class WhatsAppClient:
             {"messaging_product": "whatsapp", "to": normalize_number(to), "type": "template", "template": template}
         )
 
-    def mark_read(self, message_id: str) -> None:
-        self._send({"messaging_product": "whatsapp", "status": "read", "message_id": message_id}, expect_id=False)
-
     def download_media(self, media_id: str, url: str = "") -> Media:
         """Fetch a voice note: look up its short-lived URL (unless the webhook sent one), then download."""
         mime_type = ""
@@ -138,23 +137,21 @@ class WhatsAppClient:
                 info = self._transport.json("GET", f"{self._api}/{media_id}", headers=self._headers)
                 url, mime_type = info.get("url", ""), info.get("mime_type", "")
                 if not url:
-                    raise WhatsAppError(f"media {media_id} has no download URL")
+                    raise MessengerError(f"media {media_id} has no download URL")
             response = self._transport.request("GET", url, headers=self._headers, timeout=60)
         except TransportError as exc:
             raise _as_whatsapp_error(exc) from None
         return Media(response.body, mime_type or response.header("Content-Type") or "application/octet-stream")
 
-    def _send(self, payload: dict[str, Any], *, expect_id: bool = True) -> str:
+    def _send(self, payload: dict[str, Any]) -> str:
         try:
             data = self._transport.json("POST", self._messages_url, payload, headers=self._headers)
         except TransportError as exc:
             raise _as_whatsapp_error(exc) from None
-        if not expect_id:
-            return ""
         try:
             return str(data["messages"][0]["id"])
         except (KeyError, IndexError, TypeError):
-            raise WhatsAppError("WhatsApp accepted the request but returned no message id") from None
+            raise MessengerError("WhatsApp accepted the request but returned no message id") from None
 
 
 def verify_signature(app_secret: str, body: bytes, header: str | None) -> bool:
@@ -243,16 +240,16 @@ def _dicts(items: Any) -> Iterator[dict[str, Any]]:
         yield from (item for item in items if isinstance(item, dict))
 
 
-def _as_whatsapp_error(error: TransportError) -> WhatsAppError:
+def _as_whatsapp_error(error: TransportError) -> MessengerError:
     detail = error.json()
     inner = detail.get("error") if isinstance(detail, dict) else None
     if isinstance(inner, dict):
         code = inner.get("code")
         message = inner.get("error_user_msg") or inner.get("message") or str(error)
-        return WhatsAppError(
+        return MessengerError(
             f"{message} (code {code})", code=code if isinstance(code, int) else None, status=error.status
         )
-    return WhatsAppError(str(error), status=error.status)
+    return MessengerError(str(error), status=error.status)
 
 
 def _clip(text: str, limit: int) -> str:

@@ -57,7 +57,7 @@ Volunteers can also ask, by text or voice note: "what is down right now?", "is D
 
 Most last-mile Wi-Fi has no operations team. India alone has over 4 lakh PM-WANI public Wi-Fi hotspots, run by local entrepreneurs through 207 aggregators. In April 2026 India's telecom regulator (TRAI) proposed outside help with network management to reduce the burden on these small operators. Uplink is built for that reader: someone who needs to hear "the router behind the tea stall lost power", in their own language, on the phone they already use. Today it works with any Freifunk map that publishes meshviewer.json. PM-WANI aggregators are the next step.
 
-**Delivery.** Uplink supports the WhatsApp Cloud API (built and tested) and Telegram. Meta's review of new business accounts locked our WhatsApp account during the hackathon, so the live demo runs on Telegram. Switching back is one setting (`WHATSAPP_PROVIDER`).
+**Delivery.** Uplink supports the WhatsApp Cloud API (built and tested) and Telegram. Meta's review of new business accounts locked our WhatsApp account during the hackathon, so the live demo runs on Telegram. Switching back is one setting (`MESSENGER`).
 
 ## How it works
 
@@ -102,7 +102,7 @@ writes the message in the reader's language. The draft is checked before it is s
 that is not in the facts, any link, or an overlong text gets one rewrite request, then the
 hand-written template goes out instead. An alert always arrives, and it is always right.
 
-**Listen.** WhatsApp voice notes (OGG/Opus) are converted with ffmpeg to 16 kHz mono WAV, transcribed
+**Listen.** Voice notes (OGG/Opus, from WhatsApp or Telegram) are converted with ffmpeg to 16 kHz mono WAV, transcribed
 by Muse Voice Transcribe with a Telugu/English/Hindi bias, and answered from Uplink's live state.
 
 **Talk back.** Reply to any alert: "why?", "what do I check first?", "say it in Hindi", or a voice note. Muse Spark answers from that alert's own evidence, in your language, and the same number check applies.
@@ -127,17 +127,24 @@ python3 -m uplink run                # alerts, plus answers to texts and voice n
 | `check` | fetch the map once; show the network, its busiest dependency points, and what is configured |
 | `analyze [--file F] [--hours 24] [--json] [--html FILE] [--send [--pick N] [--dry-run]]` | explain the outages visible in one snapshot |
 | `watch [--once] [--dry-run]` | watch the map and send alerts |
-| `serve` | answer WhatsApp texts and voice notes |
+| `serve` | answer texts and voice notes, from WhatsApp or Telegram |
 | `run [--dry-run]` | `watch` and `serve` in one process |
 | `ask "question"` / `ask --audio note.ogg` | ask from the terminal, optionally with a voice note |
 | `replay data/recordings` | run recorded snapshots through Uplink, without touching your data |
 | `send-test [--template]` | check that messages reach your phone, with fixes for common errors |
+| `telegram-chat-id` | list the chats that messaged your Telegram bot, to find `TELEGRAM_CHAT_ID` |
 | `report [--json]` | numbers from the live run |
 
 The settings that matter are in [.env.example](.env.example); the WhatsApp setup, including the
-webhook tunnel and troubleshooting, is in [docs/WHATSAPP_SETUP.md](docs/WHATSAPP_SETUP.md). Uplink
-talks to WhatsApp through Meta's Cloud API, or through Twilio's WhatsApp sandbox when a new Meta
-business account is locked (`WHATSAPP_PROVIDER=twilio`).
+webhook tunnel and troubleshooting, is in [docs/WHATSAPP_SETUP.md](docs/WHATSAPP_SETUP.md).
+
+**Telegram instead of WhatsApp** (no business account, no webhook):
+
+1. In Telegram, message **@BotFather**, send `/newbot`, and copy the bot token it answers with.
+2. Open your bot and press **Start**.
+3. In `.env`, set `MESSENGER=telegram` and `TELEGRAM_BOT_TOKEN=...`. Then
+   `python3 -m uplink telegram-chat-id` prints your chat id: add it as `TELEGRAM_CHAT_ID=...`.
+4. `python3 -m uplink send-test`, then `python3 -m uplink run`.
 
 ## Tests
 
@@ -153,15 +160,17 @@ meshes; a failure prints the seed to replay it.
 The suite covers the real Munich snapshot (the cascade, the site outages, the two nodes going quiet
 before the map noticed), property tests on random meshes with planted failures, the incident
 lifecycle, twelve simulated hours of a busy mesh with restarts, and the whole loop end to end
-against fake map, Meta Model API and WhatsApp servers over real HTTP, including a real OGG/Opus
-voice note through ffmpeg.
+against fake map, Meta Model API, WhatsApp and Telegram servers over real HTTP, including a real
+OGG/Opus voice note through ffmpeg.
+
+Line coverage: 95% (CI fails below 90%).
 
 ## Data and privacy
 
 - Uplink reads only the fields it needs. Router owners' contact details, which the map publishes,
   are never read, so they cannot reach a log, a prompt or a message.
 - It polls at most once a minute and says who it is in its User-Agent (`CONTACT`).
-- Messages go only to your own number, and messages from any other number are ignored.
+- Messages go only to your own number (or your Telegram chat), and messages from anyone else are ignored.
 - The event log never contains message text, only lengths and outcomes.
 - `ANONYMIZE=true` replaces router names with short ids (`node d477b2`) for screenshots and demos.
 - The test fixture is real data trimmed to the nodes that matter, with contact details and
@@ -204,7 +213,7 @@ voice note through ffmpeg.
 | `incidents.py` | incident lifecycle and alert policy |
 | `facts.py`, `templates.py`, `writer.py` | what a message may say, hand-written messages, Muse Spark with checks |
 | `incident_page.py` | one-page picture of the outages, for analyze --html |
-| `muse.py`, `whatsapp.py`, `voice.py` | Meta Model API, WhatsApp Cloud API, audio conversion |
+| `muse.py`, `whatsapp.py`, `telegram.py`, `voice.py` | Meta Model API, WhatsApp Cloud API, Telegram bot, audio conversion |
 | `monitor.py`, `server.py`, `assistant.py` | the watch loop, the webhook, answering questions |
 | `store.py`, `report.py`, `config.py`, `app.py`, `cli.py` | data folder, numbers, settings, wiring, command line |
 

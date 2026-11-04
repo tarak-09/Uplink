@@ -44,6 +44,28 @@ class TransportTest(unittest.TestCase):
             again = transport.request("GET", feed.feed_url, headers={"If-None-Match": etag})
         self.assertEqual((again.status, again.body), (304, b""))
 
+    def test_credentials_are_not_carried_into_a_redirect(self):
+        # A media download that redirects to cloud storage, which, like S3, refuses a second set of credentials.
+        server = FakeServer()
+
+        def media(request: Recorded, match):
+            if request.headers.get("authorization") != "Bearer secret":
+                return 401, {}, b"unauthorized"
+            return 307, {"Location": f"{server.url}/storage/note?signature=abc"}, b""
+
+        def storage(request: Recorded, match):
+            if "authorization" in request.headers:
+                return 400, {}, b"Only one auth mechanism allowed"
+            return 200, {"Content-Type": "audio/ogg"}, b"OggS"
+
+        server.route("GET", "/media/note", media)
+        server.route("GET", "/storage/note", storage)
+        with server:
+            transport, _ = self.transport()
+            response = transport.request("GET", f"{server.url}/media/note", headers={"Authorization": "Bearer secret"})
+        self.assertEqual(response.body, b"OggS")
+        self.assertNotIn("authorization", server.requests_to("/storage/note")[0].headers)
+
     def test_reads_are_retried_with_backoff(self):
         with FlakyServer(503, failures=2) as server:
             transport, sleeps = self.transport(backoff=0.5)

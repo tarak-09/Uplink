@@ -16,9 +16,7 @@ from .support import (
     FakeFeed,
     FakeGraph,
     FakeTelegram,
-    FakeTwilio,
     MeshBuilder,
-    twilio_error,
     whatsapp_error,
 )
 
@@ -205,49 +203,6 @@ class WhatsAppCommandsTest(CliTestCase):
         self.assertIn("WHATSAPP_APP_SECRET, WHATSAPP_VERIFY_TOKEN", err)
 
 
-class TwilioCommandsTest(CliTestCase):
-    def setUp(self):
-        super().setUp()
-        self.twilio = FakeTwilio().__enter__()
-        self.write_env(
-            WHATSAPP_PROVIDER="twilio",
-            TWILIO_ACCOUNT_SID=FakeTwilio.account_sid,
-            TWILIO_AUTH_TOKEN=FakeTwilio.auth_token,
-            TWILIO_BASE_URL=self.twilio.url,
-            WHATSAPP_TO="+49 151 12345678",
-        )
-
-    def tearDown(self):
-        self.twilio.__exit__()
-        super().tearDown()
-
-    def test_send_test_goes_through_the_sandbox(self):
-        code, out, _ = self.run_cli("send-test")
-        self.assertEqual(code, 0)
-        self.assertEqual(self.twilio.bodies(), [TEST_MESSAGE])
-        self.assertIn("join code to +1 415 523 8886", out)
-
-    def test_the_sandbox_has_no_templates(self):
-        code, out, _ = self.run_cli("send-test", "--template")
-        self.assertEqual(code, 1)
-        self.assertIn("sandbox cannot send your own templates", out)
-        self.assertEqual(self.twilio.sent(), [])
-
-    def test_send_test_explains_a_number_that_has_not_joined(self):
-        self.twilio.fail_with = twilio_error(
-            63015, "Channel Sandbox can only send messages to phone numbers that have joined the Sandbox"
-        )
-        code, out, _ = self.run_cli("send-test")
-        self.assertEqual(code, 1)
-        self.assertIn("What to do: Your number has not joined the sandbox", out)
-
-    def test_serve_needs_only_the_twilio_credentials(self):
-        self.write_env(WHATSAPP_PROVIDER="twilio", TWILIO_ACCOUNT_SID="AC1", WHATSAPP_TO="4915112345678")
-        code, _, err = self.run_cli("serve")
-        self.assertEqual(code, 2)
-        self.assertIn("the webhook needs TWILIO_AUTH_TOKEN", err)
-
-
 class TelegramCommandsTest(CliTestCase):
     def setUp(self):
         super().setUp()
@@ -260,7 +215,7 @@ class TelegramCommandsTest(CliTestCase):
 
     def telegram_env(self, **values: str) -> dict[str, str]:
         return {
-            "WHATSAPP_PROVIDER": "telegram",
+            "MESSENGER": "telegram",
             "TELEGRAM_BOT_TOKEN": FakeTelegram.token,
             "TELEGRAM_CHAT_ID": str(FakeTelegram.chat_id),
             "TELEGRAM_BASE_URL": self.telegram.url,
@@ -273,6 +228,16 @@ class TelegramCommandsTest(CliTestCase):
         self.assertIn("Telegram accepted the message (id 1)", out)
         self.assertEqual(self.telegram.texts(), [TEST_MESSAGE])
         self.assertEqual(self.telegram.sent()[0]["chat_id"], 4242)
+
+    def test_the_old_provider_setting_stops_with_what_to_write_instead(self):
+        env = self.telegram_env()
+        del env["MESSENGER"]
+        self.write_env(WHATSAPP_PROVIDER="telegram", **env)
+        code, _, err = self.run_cli("send-test")
+        self.assertEqual(code, 2)
+        self.assertIn("WHATSAPP_PROVIDER is now called MESSENGER", err)
+        self.assertIn("MESSENGER=telegram", err)
+        self.assertEqual(self.telegram.sent(), [])
 
     def test_telegram_has_no_templates(self):
         code, out, _ = self.run_cli("send-test", "--template")

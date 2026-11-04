@@ -9,13 +9,12 @@ from . import __version__
 from .assistant import Assistant
 from .config import Settings
 from .feed import Feed, open_feed
-from .monitor import ConsoleSender, Monitor, Sender, WhatsAppSender
+from .monitor import ConsoleSender, MessengerSender, Monitor, Sender
 from .muse import MetaModelAPI
 from .server import WebhookApp
 from .store import Store
 from .telegram import TelegramBot, TelegramPoller
 from .transport import Transport
-from .twilio import TwilioWhatsApp
 from .whatsapp import Messenger, WhatsAppClient
 from .writer import Writer
 
@@ -42,20 +41,10 @@ def make_telegram_bot(settings: Settings, transport: Transport) -> TelegramBot:
     return TelegramBot(token=settings.telegram_bot_token, transport=transport, base_url=settings.telegram_base_url)
 
 
-def make_whatsapp(settings: Settings, transport: Transport) -> Messenger | None:
-    """The configured WhatsApp provider, or None while its credentials are missing."""
+def make_messenger(settings: Settings, transport: Transport) -> Messenger | None:
+    """The configured messenger (WhatsApp or Telegram), or None while its credentials are missing."""
     if settings.uses_telegram:
         return make_telegram_bot(settings, transport) if settings.telegram_bot_token else None
-    if settings.uses_twilio:
-        if not (settings.twilio_account_sid and settings.twilio_auth_token):
-            return None
-        return TwilioWhatsApp(
-            account_sid=settings.twilio_account_sid,
-            auth_token=settings.twilio_auth_token,
-            transport=transport,
-            sender=settings.twilio_whatsapp_from,
-            base_url=settings.twilio_base_url,
-        )
     if not (settings.whatsapp_token and settings.whatsapp_phone_number_id):
         return None
     return WhatsAppClient(
@@ -71,17 +60,17 @@ def make_writer(settings: Settings, model: MetaModelAPI | None) -> Writer:
     return Writer(model, language=settings.language, network=settings.network_name)
 
 
-def make_sender(settings: Settings, whatsapp: Messenger | None, *, dry_run: bool) -> Sender:
+def make_sender(settings: Settings, messenger: Messenger | None, *, dry_run: bool) -> Sender:
     if settings.uses_telegram:
-        if dry_run or whatsapp is None or not settings.telegram_chat_id:
+        if dry_run or messenger is None or not settings.telegram_chat_id:
             return ConsoleSender()
-        return WhatsAppSender(whatsapp, settings.telegram_chat_id, service_window=False)
-    if dry_run or whatsapp is None or not settings.whatsapp_to:
+        return MessengerSender(messenger, settings.telegram_chat_id, service_window=False)
+    if dry_run or messenger is None or not settings.whatsapp_to:
         return ConsoleSender()
-    return WhatsAppSender(
-        whatsapp,
+    return MessengerSender(
+        messenger,
         settings.whatsapp_to,
-        template="" if settings.uses_twilio else settings.whatsapp_alert_template,
+        template=settings.whatsapp_alert_template,
         template_language=settings.whatsapp_template_language,
     )
 
@@ -101,7 +90,7 @@ def make_monitor(
         feed=feed or open_feed(settings.feed_url, transport),
         store=store or Store(settings.data_dir),
         writer=make_writer(settings, make_model(settings, transport)),
-        sender=make_sender(settings, make_whatsapp(settings, transport), dry_run=dry_run),
+        sender=make_sender(settings, make_messenger(settings, transport), dry_run=dry_run),
         clock=clock,
     )
 
@@ -112,14 +101,14 @@ def make_assistant(settings: Settings, store: Store, model: MetaModelAPI | None)
 
 def make_webhook(settings: Settings, *, store: Store | None = None, transport: Transport | None = None) -> WebhookApp:
     transport = transport or make_transport(settings)
-    whatsapp = make_whatsapp(settings, transport)
-    if whatsapp is None:
+    messenger = make_messenger(settings, transport)
+    if messenger is None:
         raise ValueError("the webhook needs " + ", ".join(settings.missing_for_webhook()))
     store = store or Store(settings.data_dir)
     model = make_model(settings, transport)
     return WebhookApp(
         settings=settings,
-        whatsapp=whatsapp,
+        messenger=messenger,
         assistant=make_assistant(settings, store, model),
         store=store,
         model=model,
