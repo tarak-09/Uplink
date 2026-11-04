@@ -1,7 +1,9 @@
+import tempfile
 import unittest
 from datetime import datetime, timedelta
 from pathlib import Path
 
+from uplink.config import load_settings
 from uplink.correlate import Situation, correlate
 from uplink.facts import (
     Namer,
@@ -166,6 +168,28 @@ class TimeZoneLabelTest(unittest.TestCase):
         (incident,), snapshot = self.cascade()
         facts = outage_facts(incident, snapshot, make_settings(Path("."), time_zone_label="CET"))
         self.assertEqual(facts["started"], "12:00 CET")
+
+    def test_an_empty_label_turns_it_off(self):
+        self.assertEqual(load_settings({}, None).time_zone_label, "Munich time", "left out: the default stays")
+        with tempfile.TemporaryDirectory() as folder:
+            env_file = Path(folder, ".env")
+            env_file.write_text("TIME_ZONE_LABEL=      # no time zone name\n", encoding="utf-8")
+            from_file = load_settings({}, env_file)
+        off = {"the environment": load_settings({"TIME_ZONE_LABEL": " "}, None), "a .env file": from_file}
+        for source, settings in off.items():
+            with self.subTest(source=source):
+                self.assertEqual(settings.time_zone_label, "")
+                (incident,), snapshot = self.cascade()
+                facts = outage_facts(incident, snapshot, settings)
+                self.assertEqual(facts["started"], "12:00")
+                network = network_facts(snapshot, [incident], [], settings, question="is b up?")
+                self.assertEqual((network["as_of"], network["open_outages"][0]["started"]), ("12:01", "12:00"))
+                self.assertRegex(network["nodes_asked_about"][0]["last_heard"], r"^\d\d:\d\d$")
+                resolved = resolved_facts(incident, snapshot, settings)
+                self.assertEqual((resolved["started"], resolved["ended"]), ("12:00", "12:01"))
+                alert = render(facts, "english")
+                self.assertIn("Since 12:00 · Freifunk München · nodes offline: 2", alert)
+                self.assertEqual(check_draft(alert, facts, 700), "")
 
 
 class NetworkFactsTest(unittest.TestCase):

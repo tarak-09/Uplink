@@ -25,7 +25,7 @@ class Settings:
     # The network being watched
     feed_url: str = "https://map.ffmuc.net/data/meshviewer.json"
     network_name: str = "Freifunk München"
-    time_zone_label: str = "Munich time"  # follows every clock time in messages: "23:44 Munich time"
+    time_zone_label: str = "Munich time"  # follows every clock time in messages: "23:44 Munich time"; "" is off
     poll_interval: int = 60
     stale_after: int = 180
     language: str = "english"
@@ -160,8 +160,8 @@ def load_settings(
     values: dict[str, Any] = {}
     for variable, (attribute, convert) in _VARIABLES.items():
         raw = merged.get(variable, "").strip()
-        if not raw:
-            continue
+        if not raw and not (variable in _BLANK_TURNS_OFF and variable in merged):
+            continue  # "KEY=" means "not filled in yet", so the default stays
         try:
             values[attribute] = convert(raw)
         except ValueError as exc:
@@ -246,6 +246,10 @@ def _chat_id(raw: str) -> str:
         raise ValueError(f"expected a number like 123456789 (group ids start with -), got {raw!r}")
     return str(int(raw))
 
+
+# Variables where writing the name with no value is a choice, not a blank to fill in later:
+# TIME_ZONE_LABEL= turns the label off, while leaving it out keeps "Munich time".
+_BLANK_TURNS_OFF = frozenset({"TIME_ZONE_LABEL"})
 
 _VARIABLES: dict[str, tuple[str, Callable[[str], Any]]] = {
     "FEED_URL": ("feed_url", _url),

@@ -56,6 +56,26 @@ class AnalyzeTest(CliTestCase):
         )
         self.assertIn("they used 3 different gateways, so the gateways are not the problem", out)
 
+    def test_says_how_many_fewer_alerts_than_quiet_nodes(self):
+        _, out, _ = self.run_cli("analyze", "--file", str(FIXTURE))
+        lines = out.splitlines()
+        counts = next(i for i, line in enumerate(lines) if line.startswith("In the last 24 h, 79 nodes went quiet"))
+        self.assertEqual(lines[counts + 1], "Uplink would send 6 alerts instead of 79 (92% fewer).")
+        self.assertEqual(lines[counts + 2], "", "a blank line still separates it from the list")
+        self.assertTrue(lines[counts + 3].startswith("1. 22/10 16:15"))
+
+    def test_the_noise_line_with_one_outage_and_with_none(self):
+        one = Path(self.folder.name, "one.json")
+        mesh = MeshBuilder().gateway("gw").node("a", via="gw").node("b", via="a").tick().drop("a", "b", ago=30)
+        one.write_text(json.dumps(mesh.document()), encoding="utf-8")
+        self.assertIn("Uplink would send 1 alert instead of 2 (50% fewer).", self.run_cli("analyze", "--file", str(one))[1])
+        none = Path(self.folder.name, "none.json")
+        none.write_text(json.dumps(MeshBuilder().gateway("gw").node("a", via="gw").tick().document()), encoding="utf-8")
+        code, out, _ = self.run_cli("analyze", "--file", str(none))
+        self.assertEqual(code, 0)
+        self.assertIn("In the last 24 h, 0 nodes went quiet", out)
+        self.assertIn("Uplink would send 0 alerts instead of 0 (0% fewer).", out)
+
     def test_json_output(self):
         code, out, _ = self.run_cli("analyze", "--file", str(FIXTURE), "--json")
         facts = json.loads(out)
@@ -336,7 +356,9 @@ class OtherCommandsTest(CliTestCase):
         code, out, _ = self.run_cli("report")
         self.assertEqual(code, 0)
         self.assertIn("Network now       9 of 10 nodes reachable", out)
+        self.assertIn("Noise: 0 nodes failed, 0 alerts sent (0% fewer)", out)
         self.assertEqual(json.loads(self.run_cli("report", "--json")[1])["polls"], {"ok": 1})
+        self.assertEqual(json.loads(self.run_cli("report", "--json")[1])["noise"]["percent_fewer"], 0)
 
     def test_configuration_mistakes_exit_with_2(self):
         self.write_env(POLL_INTERVAL_SECONDS="10", FEED_URL="https://map.example.org/data/meshviewer.json")

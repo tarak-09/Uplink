@@ -59,6 +59,7 @@ def build_report(events: Iterable[dict[str, Any]]) -> dict[str, Any]:
 
     total_polls = sum(polls.values())
     real = [i for i in sizes if i not in merged]
+    nodes_failed = sum(sizes[i] for i in real)
     return {
         "watching_hours": round((last - first).total_seconds() / 3600, 1) if first and last else 0.0,
         "first_poll": first.isoformat() if first else None,
@@ -83,12 +84,17 @@ def build_report(events: Iterable[dict[str, Any]]) -> dict[str, Any]:
             "held_back": dict(held_back),
             "failed": failures,
         },
+        "noise": {
+            "nodes_failed": nodes_failed,
+            "alerts_sent": alerts,
+            "percent_fewer": percent_fewer(alerts, nodes_failed),
+        },
         "replies": dict(replies),
     }
 
 
 def format_report(report: dict[str, Any]) -> str:
-    incidents, alerts, network = report["incidents"], report["alerts"], report["network"]
+    incidents, alerts, network, noise = report["incidents"], report["alerts"], report["network"], report["noise"]
     polls = sum(report["polls"].values())
     lines = [
         f"Watching          {report['watching_hours']} h, {polls} polls, feed available {report['feed_availability_pct']}%",
@@ -101,9 +107,25 @@ def format_report(report: dict[str, Any]) -> str:
         f"  arrived         median {alerts['median_seconds_from_failure']} s after the failure began",
         f"  held back       {_pairs(alerts['held_back'])}",
         f"  failed          {alerts['failed']}",
+        f"Noise: {_count(noise['nodes_failed'], 'node')} failed, {_count(noise['alerts_sent'], 'alert')} sent "
+        f"({noise['percent_fewer']}% fewer)",
         f"Questions         {_pairs(report['replies'])}",
     ]
     return "\n".join(lines)
+
+
+def percent_fewer(alerts: int, nodes: int) -> int:
+    """How much smaller the alert count is than the number of nodes that failed, in whole percent.
+
+    0 when no node failed, and never negative.
+    """
+    if nodes <= 0:
+        return 0
+    return max(0, round(100 * (nodes - alerts) / nodes))
+
+
+def _count(number: int, word: str) -> str:
+    return f"{number} {word}{'' if number == 1 else 's'}"
 
 
 def _pairs(counts: dict[str, int]) -> str:

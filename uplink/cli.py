@@ -37,7 +37,7 @@ from .incidents import Incident
 from .mesh import Snapshot, dependency_points
 from .monitor import SendError
 from .muse import ModelAPIError
-from .report import build_report, format_report
+from .report import build_report, format_report, percent_fewer
 from .server import ASR_KEYWORDS, ASR_LANGUAGES, WebhookApp, make_server
 from .store import Store, StoreError
 from .telegram import recent_chats
@@ -385,7 +385,11 @@ def _print_analysis(
     )
     print(
         f"In the last {hours:g} h, {went_quiet} nodes went quiet: {len(notable)} outages involving several "
-        f"nodes, and {len(incidents) - len(notable)} single nodes.\n"
+        f"nodes, and {len(incidents) - len(notable)} single nodes."
+    )
+    print(
+        f"Uplink would send {_plural(len(notable), 'alert')} instead of {went_quiet} "
+        f"({percent_fewer(len(notable), went_quiet)}% fewer).\n"
     )
     for number, incident in enumerate(notable, 1):
         facts = outage_facts(incident, snapshot, settings)
