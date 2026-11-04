@@ -1,6 +1,8 @@
 # Uplink
 [![tests](https://github.com/tarak-09/Uplink/actions/workflows/ci.yml/badge.svg)](https://github.com/tarak-09/Uplink/actions/workflows/ci.yml)
 
+Demo video (2:35): https://youtu.be/ZDuev4sqAdQ
+
 **When a community Wi-Fi network breaks, Uplink tells the volunteers what broke, why, and what to check first, on their phone, in English, Telugu or Hindi.**
 
 Freifunk München runs about 2,090 routers, with over 3,000 people online on a weekday night, all looked after by volunteers. Its public map turns failed routers red, but never says why. In the 24 hours before 23 October 2026, 79 routers went quiet. Reading the same public data, Uplink found 6 real outages among them. The biggest was one rooftop antenna that took the six antennas behind it offline within 15 seconds.
