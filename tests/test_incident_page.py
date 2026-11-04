@@ -4,6 +4,7 @@ import json
 import re
 import tempfile
 import unittest
+from collections import Counter
 from datetime import timedelta
 from html.parser import HTMLParser
 from pathlib import Path
@@ -73,6 +74,16 @@ def boxes(section):
     names = re.findall(r'<text class="name"[^>]*>(.*?)</text>', section)
     states = re.findall(r'<text class="state"[^>]*>(.*?)</text>', section)
     return dict(zip(names, states, strict=True))
+
+
+def svg_width(section):
+    return float(re.search(r'<svg viewBox="0 0 ([\d.]+) ', section).group(1))
+
+
+def rects(section):
+    """(x, y, width, height, rx) of each rectangle in one picture: node boxes have rx 23, the location outline 16."""
+    found = re.findall(r'<rect x="([-\d.]+)" y="([-\d.]+)" width="([\d.]+)" height="([\d.]+)" rx="([\d.]+)"', section)
+    return [tuple(float(value) for value in item) for item in found]
 
 
 def assert_well_formed(test, page):
@@ -219,6 +230,40 @@ class BuiltMeshTest(unittest.TestCase):
         (outage,) = sections(self.render(mesh.tick().drop(*"abcdef", ago=40)))
         self.assertIn("Showing 4 of 6 nodes.", outage)
         self.assertEqual(len(boxes(outage)), 4 + 1, "four failed nodes and the gateway above them")
+
+    def site_outage(self, count):
+        """One outage section: `count` kiosks that went quiet together, with no gateway or neighbour known above."""
+        mesh = MeshBuilder().gateway("gw")
+        kiosks = [f"k{i}" for i in range(1, count + 1)]
+        for i, kiosk in enumerate(kiosks, 1):
+            mesh.node(kiosk, via="gw", name=f"Kiosk{i}")
+            mesh.nodes[kiosk].update(gateway=None, gateway_nexthop=None)  # the live map often has neither
+        (outage,) = sections(self.render(mesh.tick().drop(*kiosks, ago=40)))
+        return outage
+
+    def test_a_wide_site_outage_wraps_into_rows_instead_of_shrinking(self):
+        outage = self.site_outage(8)
+        self.assertIn("Site outage from", outage)
+        self.assertEqual(len(boxes(outage)), 8)
+        self.assertLessEqual(svg_width(outage), 2 * PAD_X + 4 * COLUMN)
+        nodes = [r for r in rects(outage) if r[4] == 23]
+        (outline,) = (r for r in rects(outage) if r[4] == 16)
+        self.assertEqual(sorted(Counter(r[1] for r in nodes).values()), [4, 4], "two rows of four")
+        left, top, width, height, _ = outline
+        for x, y, w, h, _ in nodes:
+            self.assertTrue(left <= x and x + w <= left + width and top <= y and y + h <= top + height, (x, y))
+        self.assertIn("check first: this location", outage)
+
+    def test_rows_are_even_and_four_or_fewer_stay_in_one_row(self):
+        for count, columns in {4: 4, 5: 3, 6: 3, 7: 4}.items():
+            with self.subTest(count=count):
+                self.assertEqual(svg_width(self.site_outage(count)), 2 * PAD_X + columns * COLUMN)
+
+    def test_twelve_nodes_with_nothing_above_draw_eight_in_two_rows_and_say_so(self):
+        outage = self.site_outage(12)
+        self.assertIn("Showing 8 of 12 nodes.", outage)
+        self.assertEqual(len(boxes(outage)), 8)
+        self.assertLessEqual(svg_width(outage), 2 * PAD_X + 4 * COLUMN)
 
 
 class CommandTest(unittest.TestCase):
