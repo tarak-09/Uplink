@@ -33,6 +33,7 @@ from .config import ConfigError, Settings, load_settings
 from .correlate import Situation, correlate
 from .facts import Namer, clock, outage_facts
 from .feed import FeedError, iter_recordings, open_feed, read_snapshot
+from .incident_page import render_page
 from .incidents import Incident
 from .mesh import Snapshot, dependency_points
 from .monitor import SendError
@@ -99,6 +100,7 @@ def build_parser() -> argparse.ArgumentParser:
     analyze.add_argument("--send", action="store_true", help="send the alert for one outage")
     analyze.add_argument("--pick", type=int, default=1, help="which outage to send, as numbered (default: 1)")
     analyze.add_argument("--dry-run", action="store_true", help="print the alert instead of sending it")
+    analyze.add_argument("--html", type=Path, metavar="FILE", help="also write a picture of each outage to FILE")
 
     watch = command("watch", cmd_watch, "watch the map and send alerts")
     watch.add_argument("--once", action="store_true", help="poll a single time and exit")
@@ -173,6 +175,9 @@ def cmd_analyze(args: argparse.Namespace, settings: Settings) -> int:
         )
     else:
         _print_analysis(snapshot, settings, incidents, notable, args.hours)
+    if args.html:
+        args.html.write_text(render_page(snapshot, settings, incidents, notable, args.hours), encoding="utf-8")
+        print(f"Wrote {args.html}", file=sys.stderr)
     if not args.send:
         return 0
     if not 1 <= args.pick <= len(notable):

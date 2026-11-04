@@ -116,7 +116,7 @@ python3 -m uplink run                # alerts, plus answers to texts and voice n
 | Command | What it does |
 |---|---|
 | `check` | fetch the map once; show the network, its busiest dependency points, and what is configured |
-| `analyze [--file F] [--hours 24] [--json] [--send [--pick N] [--dry-run]]` | explain the outages visible in one snapshot |
+| `analyze [--file F] [--hours 24] [--json] [--html FILE] [--send [--pick N] [--dry-run]]` | explain the outages visible in one snapshot |
 | `watch [--once] [--dry-run]` | watch the map and send alerts |
 | `serve` | answer WhatsApp texts and voice notes |
 | `run [--dry-run]` | `watch` and `serve` in one process |
@@ -188,6 +188,7 @@ voice note through ffmpeg.
 | `correlate.py` | evidence and outage grouping |
 | `incidents.py` | incident lifecycle and alert policy |
 | `facts.py`, `templates.py`, `writer.py` | what a message may say, hand-written messages, Muse Spark with checks |
+| `incident_page.py` | one-page picture of the outages, for analyze --html |
 | `muse.py`, `whatsapp.py`, `voice.py` | Meta Model API, WhatsApp Cloud API, audio conversion |
 | `monitor.py`, `server.py`, `assistant.py` | the watch loop, the webhook, answering questions |
 | `store.py`, `report.py`, `config.py`, `app.py`, `cli.py` | data folder, numbers, settings, wiring, command line |

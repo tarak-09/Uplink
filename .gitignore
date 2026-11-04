@@ -8,3 +8,4 @@ build/
 dist/
 .mypy_cache/
 .ruff_cache/
+outages*.html
