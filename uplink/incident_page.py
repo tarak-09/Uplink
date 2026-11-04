@@ -13,6 +13,7 @@ import html
 from collections import defaultdict
 from dataclasses import dataclass
 from datetime import datetime, timedelta
+from math import ceil
 from typing import Iterable, Iterator, Sequence
 from urllib.parse import urlsplit
 
@@ -28,6 +29,7 @@ COLUMN, ROW = 180, 104
 PAD_X, PAD_TOP, PAD_BOTTOM = 18, 30, 16
 ROW_LIMIT = 8  # boxes per row; the rest are counted under the picture instead of drawn
 DEPTH_LIMIT = 4  # rows of failed nodes
+WRAP_AT = 4  # boxes per row when there is no tree to draw: a wider set wraps instead of shrinking the picture
 NAME_CHARS = 19
 
 # The timeline: one dot per node that went quiet.
@@ -289,8 +291,16 @@ def _picture(incident: Incident, snapshot: Snapshot, name: Namer) -> str:
             slot[node_id] = slots + 0.5
             slots += 1
 
-    for root in tree.roots:
-        place(root, 0)
+    if not tree.anchors and not any(tree.children.values()):
+        # Nothing above, nothing behind: just a set of nodes. Wrap it into even rows (8 become 2 rows of 4)
+        # so the picture stays at full size and the names stay readable.
+        per_row = ceil(len(tree.roots) / ceil(len(tree.roots) / WRAP_AT))
+        for i, root in enumerate(tree.roots):
+            depth[root], slot[root] = i // per_row, i % per_row + 0.5
+        slots = per_row
+    else:
+        for root in tree.roots:
+            place(root, 0)
     groups: dict[str, list[float]] = defaultdict(list)
     for root, anchor in tree.anchors.items():
         groups[anchor].append(slot[root])
