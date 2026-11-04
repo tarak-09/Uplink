@@ -1,5 +1,6 @@
 import tempfile
 import unittest
+from dataclasses import replace
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -220,6 +221,24 @@ class NetworkFactsTest(unittest.TestCase):
         summary = render_status(facts, "english")
         self.assertIn("Single nodes offline recently: 1", summary)
         self.assertIn("• since", summary)
+
+    def test_open_and_ended_outages_say_what_to_check_first(self):
+        mesh = MeshBuilder().gateway("g1").gateway("g2")
+        booted = mesh.now - timedelta(days=2)
+        mesh.node("p", via="g1", name="Kiosk1", booted=booted)
+        mesh.node("q", via="g2", name="Kiosk2", booted=booted + timedelta(seconds=25)).tick()
+        (incident,), snapshot = incidents_in(mesh.drop("p", "q", ago=30))
+        evidence = outage_facts(incident, snapshot, SETTINGS)["evidence"]
+        self.assertEqual(len(evidence), 3, "names, boot time and gateways: more than a brief holds")
+        ended = replace(incident, resolved_at=snapshot.taken_at)
+        facts = network_facts(snapshot, [incident], [ended], SETTINGS)
+        (open_brief,), (ended_brief,) = facts["open_outages"], facts["recent_outages"]
+        for label, brief in (("open", open_brief), ("ended", ended_brief)):
+            with self.subTest(label):
+                self.assertEqual(brief["likely_cause"], "a power or internet cut at their location")
+                self.assertEqual(brief["check_first"], "power and the internet line at that location")
+        self.assertEqual(open_brief["evidence"], evidence[:2])
+        self.assertNotIn("evidence", ended_brief, "an ended outage keeps its brief short")
 
 
 if __name__ == "__main__":

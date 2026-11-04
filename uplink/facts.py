@@ -257,7 +257,13 @@ def _brief(incident: Incident, snapshot: Snapshot, settings: Settings) -> dict[s
         brief["ended"] = clock(incident.resolved_at, snapshot.taken_at, settings.time_zone_label)
         brief["duration"] = duration(minutes_between(incident.started_at, incident.resolved_at), "english")
     else:
-        brief["likely_cause"] = cause_and_check(incident.kind, brief["root"], anchor, via_gateway=via_gateway)[0]
+        evidence = evidence_lines(incident, name, snapshot, settings.anonymize, settings.time_zone_label)[:2]
+        if evidence:
+            brief["evidence"] = evidence
+    # Both, for open and ended outages alike: "how do I fix it?" starts from check_first.
+    brief["likely_cause"], brief["check_first"] = cause_and_check(
+        incident.kind, brief["root"], anchor, via_gateway=via_gateway
+    )
     return brief
 
 

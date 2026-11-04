@@ -128,6 +128,11 @@ class WriterTest(unittest.TestCase):
         draft = Writer(model, language="english", network="N").answer("anything in the last 3 hours?", {}, "fallback")
         self.assertEqual(draft.source, "muse")
 
+    def test_troubleshooting_answers_start_from_check_first(self):
+        prompt = Writer(None, language="english", network="N")._format(PROMPTS["answer"], "english")
+        self.assertIn("For questions about fixing or troubleshooting, start with check_first from the JSON", prompt)
+        self.assertIn("Never invent names, times or numbers; general advice needs no numbers.", prompt)
+
 
 class FollowUpTest(unittest.TestCase):
     EARLIER = ("what is down right now?", "*Daniel5* is down since 16:15 Munich time: 7 nodes, 23 people.")
