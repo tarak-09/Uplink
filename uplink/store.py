@@ -2,12 +2,13 @@
 
     state.json           the monitor's state (incidents, history), rewritten after each poll
     inbox.json           when the volunteer last wrote to Uplink (written by the webhook)
+    last_alert.json      the facts behind the last message sent, so a reply such as "why?" is about it
     snapshot.json.gz     the last snapshot in compact form, so a restart can keep diffing
     events.jsonl         an append-only log; `uplink report` turns it into numbers
     recordings/<day>/    one compact snapshot per poll, for `uplink replay` (optional)
 
-Each JSON file has a single writer process, and every write is atomic. Message text is
-never logged, only its length.
+Each JSON file has a single writer process (for last_alert.json, whichever one sent the last
+message), and every write is atomic. Message text is never logged, only its length.
 """
 
 from __future__ import annotations
@@ -17,11 +18,13 @@ import json
 import os
 import tempfile
 import threading
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Callable, Iterator
+from typing import Any, Callable, Iterator, Mapping
 
 from .mesh import Snapshot, from_compact, to_compact
+
+LAST_ALERT_MAX_AGE = timedelta(hours=24)
 
 
 class StoreError(Exception):
@@ -55,6 +58,22 @@ class Store:
 
     def save_state(self, state: dict[str, Any]) -> None:
         self.write_json("state.json", state)
+
+    def save_last_alert(self, facts: Mapping[str, Any]) -> None:
+        """Keep the facts of the message just sent. The wall clock dates it, not the snapshot."""
+        self.write_json("last_alert.json", {"sent_at": self._clock().isoformat(), "facts": dict(facts)})
+
+    def load_last_alert(self) -> dict[str, Any] | None:
+        """The facts of the last message sent, or None if missing, unreadable or older than 24 hours."""
+        try:
+            saved = self.read_json("last_alert.json")
+            age = self._clock() - datetime.fromisoformat(saved["sent_at"])
+        except (StoreError, KeyError, TypeError, ValueError):
+            return None
+        facts = saved.get("facts")
+        if not isinstance(facts, dict) or age > LAST_ALERT_MAX_AGE:
+            return None
+        return facts
 
     def load_snapshot(self) -> Snapshot | None:
         try:

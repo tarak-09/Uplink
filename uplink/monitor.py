@@ -210,6 +210,8 @@ class Monitor:
             delay_s=int((snapshot.taken_at - incident.started_at).total_seconds()),
             ref=ref,
         )
+        if not isinstance(self.sender, ConsoleSender):  # a dry run only printed it; nobody can reply
+            self.store.save_last_alert(facts)
         return True
 
     def _accept(self, snapshot: Snapshot, status: str, sent: int = 0) -> None:

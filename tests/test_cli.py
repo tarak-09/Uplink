@@ -96,6 +96,7 @@ class AnalyzeTest(CliTestCase):
         self.assertEqual(code, 0)
         self.assertIn("*6 nodes at one location went offline together*", out)
         self.assertIn("Alert written by template", out)
+        self.assertFalse((self.data / "last_alert.json").exists(), "nothing was sent, so nothing to reply to")
 
     def test_picking_an_outage_that_does_not_exist(self):
         code, _, err = self.run_cli("analyze", "--file", str(FIXTURE), "--send", "--pick", "99")
@@ -180,6 +181,13 @@ class WhatsAppCommandsTest(CliTestCase):
         self.assertIn("WhatsApp accepted the message (id wamid.0)", out)
         self.assertEqual(self.graph.texts(), [TEST_MESSAGE])
         self.assertEqual(self.graph.sent()[0]["to"], "4915112345678")
+
+    def test_a_sent_alert_is_kept_for_replies(self):
+        code, out, _ = self.run_cli("analyze", "--file", str(FIXTURE), "--send", "--pick", "1")
+        self.assertEqual(code, 0)
+        self.assertIn("sent as wamid.0", out)
+        alert = Store(self.data).load_last_alert()  # the snapshot is from October; the wall clock counts
+        self.assertEqual((alert["root"], alert["failed_within_seconds"]), ("site-bcg5", 15))
 
     def test_send_test_with_the_hello_world_template(self):
         self.run_cli("send-test", "--template")

@@ -105,6 +105,8 @@ hand-written template goes out instead. An alert always arrives, and it is alway
 **Listen.** WhatsApp voice notes (OGG/Opus) are converted with ffmpeg to 16 kHz mono WAV, transcribed
 by Muse Voice Transcribe with a Telugu/English/Hindi bias, and answered from Uplink's live state.
 
+**Talk back.** Reply to any alert: "why?", "what do I check first?", "say it in Hindi", or a voice note. Muse Spark answers from that alert's own evidence, in your language, and the same number check applies.
+
 ## Quick start
 
 Needs Python 3.10 or newer, nothing else. ffmpeg only for voice notes.
@@ -167,6 +169,12 @@ voice note through ffmpeg.
   ([scripts/make_fixture.py](scripts/make_fixture.py)).
 - Network data: Freifunk München, [map.ffmuc.net](https://map.ffmuc.net). Ask them before you
   publish their data.
+
+## What's next
+
+- Field reports by voice: say what you fixed, and Uplink logs it with the incident and tells you when every node is back.
+- Photo check: send a photo of a router's lights and Uplink tells you what to look for.
+- WhatsApp as the default channel once Meta clears our business account.
 
 ## Limits
 

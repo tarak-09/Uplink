@@ -158,6 +158,7 @@ class FollowUpTest(unittest.TestCase):
     def test_other_topics_are_still_declined(self):
         prompt = Writer(None, language="english", network="Freifunk München")._format(PROMPTS["answer"], "english")
         self.assertIn("translate your last answer", prompt)
+        self.assertIn("If the JSON has last_alert, it is the message Uplink sent most recently", prompt)
         self.assertIn(
             "Questions that are not about Freifunk München are not yours to answer, even after an exchange", prompt
         )

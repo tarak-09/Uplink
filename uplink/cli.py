@@ -36,7 +36,7 @@ from .feed import FeedError, iter_recordings, open_feed, read_snapshot
 from .incident_page import render_page
 from .incidents import Incident
 from .mesh import Snapshot, dependency_points
-from .monitor import SendError
+from .monitor import ConsoleSender, SendError
 from .muse import ModelAPIError
 from .report import build_report, format_report, percent_fewer
 from .server import ASR_KEYWORDS, ASR_LANGUAGES, WebhookApp, make_server
@@ -409,9 +409,12 @@ def _print_analysis(
 def _send_alert(incident: Incident, snapshot: Snapshot, settings: Settings, *, dry_run: bool) -> int:
     transport = make_transport(settings)
     writer = make_writer(settings, make_model(settings, transport))
-    draft = writer.write(outage_facts(incident, snapshot, settings))
+    facts = outage_facts(incident, snapshot, settings)
+    draft = writer.write(facts)
     sender = make_sender(settings, make_whatsapp(settings, transport), dry_run=dry_run)
     ref = sender.send(draft.text)
+    if not isinstance(sender, ConsoleSender):  # a dry run only prints it; nobody can reply
+        Store(settings.data_dir).save_last_alert(facts)  # replies such as "why?" are about it
     note = f" ({draft.note})" if draft.note else ""
     print(f"Alert written by {draft.source}{note}; sent as {ref}.")
     return 0

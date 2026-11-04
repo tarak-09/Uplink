@@ -1,6 +1,8 @@
-"""Answers volunteers' questions ("what is down?", "is Daniel5 up?") from Uplink's latest state.
+"""Answers volunteers' questions ("what is down?", "is Daniel5 up?", "why?") from Uplink's latest state.
 
-Each chat's last question and answer are kept for ten minutes, so a follow-up such as "can you say
+The facts of the last message Uplink sent (kept on disk for 24 hours) come along as last_alert, so a
+short reply to an alert such as "why?" or "say it in Hindi" is about that alert. Each chat's last
+question and answer are kept for ten minutes as previous_exchange, so a follow-up such as "can you say
 that in Telugu?" can build on them. They stay in memory only: message text is never written to disk.
 """
 
@@ -78,5 +80,10 @@ class Assistant:
         if command in STATUS_WORDS:
             return Draft(summary, "template")
         fallback = templates.text(language, "no_ai") + "\n" + summary
+        last_alert = self.store.load_last_alert()
+        if last_alert is not None:
+            facts["last_alert"] = last_alert
+        if earlier:
+            facts["previous_exchange"] = {"question": earlier.question, "answer": earlier.answer}
         context = (earlier.question, earlier.answer) if earlier else None
         return self.writer.answer(question, facts, fallback, language, earlier=context)

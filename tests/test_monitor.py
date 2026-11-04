@@ -1,5 +1,7 @@
 """The watch loop end to end: a fake map, Muse Spark and WhatsApp on real HTTP, a real data folder."""
 
+import contextlib
+import io
 import json
 import tempfile
 import unittest
@@ -121,6 +123,31 @@ class StoryTest(MonitorTestCase):
         self.assertEqual(self.poll().sent, 1)
         self.assertEqual(len(self.graph.texts()), 2)
 
+    def test_each_message_sent_is_kept_for_replies(self):
+        self.poll()
+        self.mesh.drop("a", "b", ago=40)
+        self.poll()
+        self.assertIsNone(self.store.load_last_alert(), "nothing sent yet")
+        self.poll()
+        alert = self.store.load_last_alert()
+        self.assertEqual((alert["event"], alert["root"], alert["nodes_offline"]), ("outage", "a.home", 2))
+        self.mesh.restore("a", "b")
+        self.poll()
+        self.assertEqual(self.store.load_last_alert()["event"], "resolved", "the back-online notice replaces it")
+
+    def test_a_dry_run_keeps_nothing_for_replies(self):
+        with contextlib.redirect_stdout(io.StringIO()) as printed:
+            transport = Transport(sleep=lambda s: None)
+            self.monitor = make_monitor(
+                self.settings, store=self.store, transport=transport, clock=self.clock, dry_run=True
+            )
+            self.poll()
+            self.mesh.drop("a", "b", ago=40)
+            self.poll()
+            self.poll()
+        self.assertIn("*a.home is down*", printed.getvalue())
+        self.assertIsNone(self.store.load_last_alert())
+
     def test_an_unchanged_map_is_not_reprocessed(self):
         self.feed.document = self.mesh.document()
         self.monitor.poll()
@@ -155,8 +182,10 @@ class FallbackTest(MonitorTestCase):
         self.poll()
         self.assertEqual(self.poll().sent, 0)
         self.assertIn("recipient list", self.events("alert_failed")[0]["error"])
+        self.assertIsNone(self.store.load_last_alert(), "a refused message is not kept for replies")
         self.graph.fail_with = None
         self.assertEqual(self.poll().sent, 1)
+        self.assertEqual(self.store.load_last_alert()["event"], "outage")
 
     def test_a_closed_service_window_is_flagged(self):
         self.poll()
